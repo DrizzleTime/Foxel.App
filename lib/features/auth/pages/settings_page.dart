@@ -33,7 +33,9 @@ class _SettingsPageState extends State<SettingsPage> {
   Timer? _scanTimer;
   bool _cameraBootstrapped = false;
   bool _cameraBusy = false;
+  bool _usingImageStream = false;
   bool _scanPaused = false;
+  bool _framePending = false;
   bool _importing = false;
   bool _loggingIn = false;
   bool _loadingCamera = true;
@@ -62,8 +64,13 @@ class _SettingsPageState extends State<SettingsPage> {
   void dispose() {
     _scanTimer?.cancel();
     _baseUrlController.dispose();
-    unawaited(_disposeCamera());
+    unawaited(_shutdownCamera());
     super.dispose();
+  }
+
+  Future<void> _shutdownCamera() async {
+    await _stopScanning();
+    await _disposeCamera();
   }
 
   Future<void> _bootstrapCamera() async {
@@ -88,8 +95,11 @@ class _SettingsPageState extends State<SettingsPage> {
       final camera = _pickCamera(cameras);
       final controller = CameraController(
         camera,
-        ResolutionPreset.medium,
+        ResolutionPreset.low,
         enableAudio: false,
+        imageFormatGroup: defaultTargetPlatform == TargetPlatform.android
+            ? ImageFormatGroup.yuv420
+            : null,
       );
       await controller.initialize();
 
@@ -103,7 +113,7 @@ class _SettingsPageState extends State<SettingsPage> {
         _loadingCamera = false;
         _statusText = '摄像头已就绪';
       });
-      _startScanning();
+      await _startScanning();
     } catch (error) {
       if (!mounted) {
         return;
@@ -141,18 +151,54 @@ class _SettingsPageState extends State<SettingsPage> {
     } catch (_) {}
   }
 
-  void _startScanning() {
+  Future<void> _stopScanning() async {
     _scanTimer?.cancel();
+    _scanTimer = null;
+    final controller = _cameraController;
+    if (_usingImageStream &&
+        controller != null &&
+        controller.value.isStreamingImages) {
+      try {
+        await controller.stopImageStream();
+      } catch (_) {}
+    }
+    _usingImageStream = false;
+  }
+
+  Future<void> _startScanning() async {
+    await _stopScanning();
     _scanPaused = false;
+    final controller = _cameraController;
+    if (controller == null) {
+      return;
+    }
+
+    if (!kIsWeb &&
+        defaultTargetPlatform == TargetPlatform.android &&
+        controller.supportsImageStreaming()) {
+      _usingImageStream = true;
+      try {
+        await controller.startImageStream(_handleCameraImage);
+        return;
+      } catch (error) {
+        _usingImageStream = false;
+        if (mounted) {
+          setState(() {
+            _errorText = error.toString();
+            _statusText = '相机帧流启动失败，改用拍照识别';
+          });
+        }
+      }
+    }
+
     _scanTimer = Timer.periodic(
       const Duration(milliseconds: 1200),
       (_) => _captureAndDecode(),
     );
   }
 
-  void _pauseScanning({String? status}) {
-    _scanTimer?.cancel();
-    _scanTimer = null;
+  Future<void> _pauseScanning({String? status}) async {
+    await _stopScanning();
     _scanPaused = true;
     if (!mounted) {
       return;
@@ -162,6 +208,37 @@ class _SettingsPageState extends State<SettingsPage> {
         _statusText = status;
       }
     });
+  }
+
+  void _handleCameraImage(CameraImage image) {
+    if (_cameraBusy || _framePending || _loggingIn || _scanPaused) {
+      return;
+    }
+    _framePending = true;
+    _cameraBusy = true;
+    unawaited(_processCameraImage(image));
+  }
+
+  Future<void> _processCameraImage(CameraImage image) async {
+    try {
+      final raw = _decoder.decodeCameraImage(image);
+      if (raw == null) {
+        return;
+      }
+      await _pauseScanning(status: '已识别到二维码');
+      await _submitRawValue(raw);
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _errorText = error.toString();
+          _statusText = null;
+        });
+      }
+      await _pauseScanning();
+    } finally {
+      _framePending = false;
+      _cameraBusy = false;
+    }
   }
 
   Future<void> _captureAndDecode() async {
@@ -176,7 +253,7 @@ class _SettingsPageState extends State<SettingsPage> {
       if (raw == null) {
         return;
       }
-      _pauseScanning(status: '已识别到二维码');
+      await _pauseScanning(status: '已识别到二维码');
       await _submitRawValue(raw);
     } catch (error) {
       if (mounted) {
@@ -185,7 +262,7 @@ class _SettingsPageState extends State<SettingsPage> {
           _statusText = null;
         });
       }
-      _pauseScanning();
+      await _pauseScanning();
     } finally {
       _cameraBusy = false;
     }
@@ -210,7 +287,7 @@ class _SettingsPageState extends State<SettingsPage> {
       _errorText = null;
       _statusText = '重新开始扫描';
     });
-    _startScanning();
+    await _startScanning();
   }
 
   Future<void> _pickImageAndDecode() async {
@@ -349,18 +426,25 @@ class _SettingsPageState extends State<SettingsPage> {
                       child: Stack(
                         fit: StackFit.expand,
                         children: [
-                          CameraPreview(controller),
-                          IgnorePointer(
-                            child: Center(
-                              child: Container(
-                                width: 220,
-                                height: 220,
-                                decoration: BoxDecoration(
-                                  border: Border.all(
-                                    color: const Color(0xFF276EF1),
-                                    width: 2,
+                          Center(
+                            child: AspectRatio(
+                              aspectRatio: controller.value.aspectRatio,
+                              child: CameraPreview(controller),
+                            ),
+                          ),
+                          Positioned.fill(
+                            child: IgnorePointer(
+                              child: Center(
+                                child: Container(
+                                  width: 220,
+                                  height: 220,
+                                  decoration: BoxDecoration(
+                                    border: Border.all(
+                                      color: const Color(0xFF276EF1),
+                                      width: 2,
+                                    ),
+                                    borderRadius: BorderRadius.circular(12),
                                   ),
-                                  borderRadius: BorderRadius.circular(12),
                                 ),
                               ),
                             ),

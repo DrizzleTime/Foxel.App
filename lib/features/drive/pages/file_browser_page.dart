@@ -528,141 +528,149 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
         backgroundColor: const Color(0xFFF4F7FA),
         body: SafeArea(
           bottom: false,
-          child: Column(
-            children: [
-              _Toolbar(
-                controller: _searchController,
-                query: _searchQuery,
-                sortLabel: _sortLabel,
-                sortAscending: _sortAscending,
-                sortField: _sortField,
-                viewMode: _viewMode,
-                onSearchChanged: (value) {
-                  setState(() => _searchQuery = value);
-                },
-                onClearSearch: () {
-                  setState(() {
-                    _searchController.clear();
-                    _searchQuery = '';
-                  });
-                },
-                onSortSelected: (field) {
-                  setState(() => _sortField = field);
-                },
-                onToggleSortDirection: () {
-                  setState(() => _sortAscending = !_sortAscending);
-                },
-                onViewModeChanged: (mode) {
-                  setState(() => _viewMode = mode);
-                },
-                onCreateFolder: _createFolder,
-              ),
-              Expanded(
-                child: FutureBuilder<DirectoryListing>(
-                  future: _listingFuture,
-                  builder: (context, snapshot) {
-                    if (snapshot.connectionState != ConnectionState.done) {
-                      return const _LoadingView();
-                    }
-                    if (snapshot.hasError) {
-                      return _ErrorView(
-                        message: snapshot.error.toString(),
-                        onRetry: _refresh,
-                      );
-                    }
+          child: FutureBuilder<DirectoryListing>(
+            future: _listingFuture,
+            builder: (context, snapshot) {
+              final loading = snapshot.connectionState != ConnectionState.done;
+              final entries = snapshot.data?.entries ?? const <FileEntry>[];
+              final summary = loading
+                  ? const _DirectorySummary(
+                      folderCount: 0,
+                      fileCount: 0,
+                      totalSize: 0,
+                      latestMtime: 0,
+                    )
+                  : _summaryFor(entries);
+              final visibleEntries = loading
+                  ? const <FileEntry>[]
+                  : _visibleEntries(entries);
+              final hasSearch = _searchQuery.trim().isNotEmpty;
 
-                    final entries =
-                        snapshot.data?.entries ?? const <FileEntry>[];
-                    final summary = _summaryFor(entries);
-                    final visibleEntries = _visibleEntries(entries);
-                    final hasSearch = _searchQuery.trim().isNotEmpty;
-
-                    return RefreshIndicator(
-                      onRefresh: () async => _refresh(),
-                      child: CustomScrollView(
-                        physics: const AlwaysScrollableScrollPhysics(),
-                        slivers: [
-                          SliverToBoxAdapter(
-                            child: _DirectoryStatusBar(
-                              path: _path,
-                              summary: summary,
-                              visibleCount: visibleEntries.length,
-                              hasSearch: hasSearch,
-                              formatSize: _formatSize,
-                              formatMtime: _formatMtime,
-                              onOpenPath: _openPath,
+              return Column(
+                children: [
+                  _Toolbar(
+                    controller: _searchController,
+                    query: _searchQuery,
+                    sortLabel: _sortLabel,
+                    sortAscending: _sortAscending,
+                    sortField: _sortField,
+                    viewMode: _viewMode,
+                    path: _path,
+                    summary: summary,
+                    visibleCount: visibleEntries.length,
+                    hasSearch: hasSearch,
+                    statusText: loading
+                        ? '加载中'
+                        : snapshot.hasError
+                        ? '加载失败'
+                        : null,
+                    formatSize: _formatSize,
+                    formatMtime: _formatMtime,
+                    onOpenPath: _openPath,
+                    onSearchChanged: (value) {
+                      setState(() => _searchQuery = value);
+                    },
+                    onClearSearch: () {
+                      setState(() {
+                        _searchController.clear();
+                        _searchQuery = '';
+                      });
+                    },
+                    onSortSelected: (field) {
+                      setState(() => _sortField = field);
+                    },
+                    onToggleSortDirection: () {
+                      setState(() => _sortAscending = !_sortAscending);
+                    },
+                    onViewModeChanged: (mode) {
+                      setState(() => _viewMode = mode);
+                    },
+                    onCreateFolder: _createFolder,
+                  ),
+                  Expanded(
+                    child: loading
+                        ? const _LoadingView()
+                        : snapshot.hasError
+                        ? _ErrorView(
+                            message: snapshot.error.toString(),
+                            onRetry: _refresh,
+                          )
+                        : RefreshIndicator(
+                            onRefresh: () async => _refresh(),
+                            child: CustomScrollView(
+                              physics: const AlwaysScrollableScrollPhysics(),
+                              slivers: [
+                                if (entries.isEmpty)
+                                  SliverFillRemaining(
+                                    hasScrollBody: false,
+                                    child: _EmptyView(
+                                      title: '当前目录为空',
+                                      message: '可以上传文件，或先创建一个文件夹。',
+                                      icon: Icons.folder_open_rounded,
+                                      primaryLabel: '上传文件',
+                                      primaryIcon: Icons.upload_file_rounded,
+                                      onPrimary: _uploadFile,
+                                      secondaryLabel: '新建文件夹',
+                                      secondaryIcon: Icons.create_new_folder_rounded,
+                                      onSecondary: _createFolder,
+                                    ),
+                                  )
+                                else if (visibleEntries.isEmpty)
+                                  SliverFillRemaining(
+                                    hasScrollBody: false,
+                                    child: _EmptyView(
+                                      title: '没有匹配结果',
+                                      message:
+                                          '当前目录没有包含“$_searchQuery”的文件。',
+                                      icon: Icons.search_off_rounded,
+                                      primaryLabel: '清空搜索',
+                                      primaryIcon: Icons.close_rounded,
+                                      onPrimary: () {
+                                        setState(() {
+                                          _searchController.clear();
+                                          _searchQuery = '';
+                                        });
+                                      },
+                                    ),
+                                  )
+                                else if (_viewMode == _ViewMode.grid)
+                                  _FileGrid(
+                                    api: widget.api,
+                                    entries: visibleEntries,
+                                    currentPath: _path,
+                                    formatSize: _formatSize,
+                                    formatMtime: _formatMtime,
+                                    fileKind: _fileKind,
+                                    onOpen: _openEntry,
+                                    onMore: _showEntryActions,
+                                  )
+                                else
+                                  _FileList(
+                                    api: widget.api,
+                                    entries: visibleEntries,
+                                    currentPath: _path,
+                                    formatSize: _formatSize,
+                                    formatMtime: _formatMtime,
+                                    fileKind: _fileKind,
+                                    onOpen: _openEntry,
+                                    onMore: _showEntryActions,
+                                  ),
+                                const SliverToBoxAdapter(
+                                  child: SizedBox(height: 84),
+                                ),
+                              ],
                             ),
                           ),
-                          if (entries.isEmpty)
-                            SliverFillRemaining(
-                              hasScrollBody: false,
-                              child: _EmptyView(
-                                title: '当前目录为空',
-                                message: '可以上传文件，或先创建一个文件夹。',
-                                icon: Icons.folder_open_rounded,
-                                primaryLabel: '上传文件',
-                                primaryIcon: Icons.upload_file_rounded,
-                                onPrimary: _uploadFile,
-                                secondaryLabel: '新建文件夹',
-                                secondaryIcon: Icons.create_new_folder_rounded,
-                                onSecondary: _createFolder,
-                              ),
-                            )
-                          else if (visibleEntries.isEmpty)
-                            SliverFillRemaining(
-                              hasScrollBody: false,
-                              child: _EmptyView(
-                                title: '没有匹配结果',
-                                message: '当前目录没有包含“$_searchQuery”的文件。',
-                                icon: Icons.search_off_rounded,
-                                primaryLabel: '清空搜索',
-                                primaryIcon: Icons.close_rounded,
-                                onPrimary: () {
-                                  setState(() {
-                                    _searchController.clear();
-                                    _searchQuery = '';
-                                  });
-                                },
-                              ),
-                            )
-                          else if (_viewMode == _ViewMode.grid)
-                            _FileGrid(
-                              api: widget.api,
-                              entries: visibleEntries,
-                              currentPath: _path,
-                              formatSize: _formatSize,
-                              formatMtime: _formatMtime,
-                              fileKind: _fileKind,
-                              onOpen: _openEntry,
-                              onMore: _showEntryActions,
-                            )
-                          else
-                            _FileList(
-                              api: widget.api,
-                              entries: visibleEntries,
-                              currentPath: _path,
-                              formatSize: _formatSize,
-                              formatMtime: _formatMtime,
-                              fileKind: _fileKind,
-                              onOpen: _openEntry,
-                              onMore: _showEntryActions,
-                            ),
-                          const SliverToBoxAdapter(
-                            child: SizedBox(height: 120),
-                          ),
-                        ],
-                      ),
-                    );
-                  },
-                ),
-              ),
-            ],
+                  ),
+                ],
+              );
+            },
           ),
         ),
         floatingActionButton: Builder(
           builder: (context) {
             final compact = MediaQuery.sizeOf(context).width < 560;
-            final bottomInset = MediaQuery.of(context).viewPadding.bottom + 96;
+            final bottomInset = MediaQuery.of(context).viewPadding.bottom + 72;
             final button = compact
                 ? FloatingActionButton(
                     tooltip: '上传文件',
@@ -714,6 +722,14 @@ class _Toolbar extends StatelessWidget {
     required this.onToggleSortDirection,
     required this.onViewModeChanged,
     required this.onCreateFolder,
+    required this.path,
+    required this.summary,
+    required this.visibleCount,
+    required this.hasSearch,
+    required this.statusText,
+    required this.formatSize,
+    required this.formatMtime,
+    required this.onOpenPath,
   });
 
   final TextEditingController controller;
@@ -728,26 +744,35 @@ class _Toolbar extends StatelessWidget {
   final VoidCallback onToggleSortDirection;
   final ValueChanged<_ViewMode> onViewModeChanged;
   final VoidCallback onCreateFolder;
+  final String path;
+  final _DirectorySummary summary;
+  final int visibleCount;
+  final bool hasSearch;
+  final String? statusText;
+  final String Function(int) formatSize;
+  final String Function(int) formatMtime;
+  final ValueChanged<String> onOpenPath;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      color: Colors.white,
-      padding: const EdgeInsets.fromLTRB(16, 2, 16, 8),
+      color: const Color(0xFFF4F7FA),
+      padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
       child: LayoutBuilder(
         builder: (context, constraints) {
           final compact = constraints.maxWidth < 720;
-          final actionGap = compact ? 4.0 : 6.0;
           final search = TextField(
             controller: controller,
             onChanged: onSearchChanged,
             decoration: InputDecoration(
               hintText: '搜索当前目录',
+              filled: true,
+              fillColor: Colors.white,
               prefixIconConstraints: const BoxConstraints(
-                minWidth: 36,
-                minHeight: 36,
+                minWidth: 28,
+                minHeight: 28,
               ),
-              prefixIcon: const Icon(Icons.search_rounded, size: 18),
+              prefixIcon: const Icon(Icons.search_rounded, size: 15),
               suffixIcon: query.isEmpty
                   ? null
                   : IconButton(
@@ -756,26 +781,35 @@ class _Toolbar extends StatelessWidget {
                       padding: EdgeInsets.zero,
                       visualDensity: VisualDensity.compact,
                       constraints: const BoxConstraints(
-                        minWidth: 32,
-                        minHeight: 32,
+                        minWidth: 24,
+                        minHeight: 24,
                       ),
-                      iconSize: 18,
+                      iconSize: 14,
                       icon: const Icon(Icons.close_rounded),
                     ),
               suffixIconConstraints: const BoxConstraints(
-                minWidth: 32,
-                minHeight: 32,
+                minWidth: 24,
+                minHeight: 24,
               ),
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(8),
-                borderSide: BorderSide.none,
+                borderSide: const BorderSide(color: Color(0xFFD7E0EA)),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+                borderSide: const BorderSide(color: Color(0xFFD7E0EA)),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+                borderSide: const BorderSide(color: Color(0xFFB9C6D7)),
               ),
               isDense: true,
-              contentPadding: const EdgeInsets.symmetric(vertical: 10),
+              contentPadding: const EdgeInsets.symmetric(vertical: 7),
             ),
           );
           final sortMenu = PopupMenuButton<_SortField>(
             tooltip: '排序',
+            padding: EdgeInsets.zero,
             onSelected: onSortSelected,
             itemBuilder: (context) => const [
               PopupMenuItem(value: _SortField.name, child: Text('按名称')),
@@ -786,87 +820,86 @@ class _Toolbar extends StatelessWidget {
             child: _ToolbarButton(
               icon: Icons.sort_rounded,
               label: sortLabel,
-              selected: true,
+              trailingIcon: Icons.keyboard_arrow_down_rounded,
               compact: compact,
             ),
           );
-          final directionButton = IconButton.outlined(
-            tooltip: sortAscending ? '升序' : '降序',
-            onPressed: onToggleSortDirection,
-            icon: Icon(
-              sortAscending
-                  ? Icons.arrow_upward_rounded
-                  : Icons.arrow_downward_rounded,
-            ),
+          final directionButton = _ToolbarButton(
+            icon: sortAscending
+                ? Icons.arrow_upward_rounded
+                : Icons.arrow_downward_rounded,
+            label: sortAscending ? '升序' : '降序',
+            compact: true,
+            onTap: onToggleSortDirection,
+            tooltip: sortAscending ? '切换为降序' : '切换为升序',
           );
-          final viewSwitch = SegmentedButton<_ViewMode>(
-            segments: [
-              ButtonSegment(
-                value: _ViewMode.grid,
-                icon: const Icon(Icons.grid_view_rounded),
-                label: compact ? const SizedBox.shrink() : const Text('网格'),
-              ),
-              ButtonSegment(
-                value: _ViewMode.list,
-                icon: const Icon(Icons.view_list_rounded),
-                label: compact ? const SizedBox.shrink() : const Text('列表'),
-              ),
-            ],
-            selected: {viewMode},
-            onSelectionChanged: (value) => onViewModeChanged(value.first),
-            showSelectedIcon: false,
+          final viewButton = _ToolbarButton(
+            icon: viewMode == _ViewMode.grid
+                ? Icons.grid_view_rounded
+                : Icons.view_list_rounded,
+            label: viewMode == _ViewMode.grid ? '网格' : '列表',
+            compact: compact,
+            selected: true,
+            onTap: () {
+              onViewModeChanged(
+                viewMode == _ViewMode.grid ? _ViewMode.list : _ViewMode.grid,
+              );
+            },
+            tooltip: viewMode == _ViewMode.grid
+                ? '切换到列表视图'
+                : '切换到网格视图',
           );
-          final createButton = compact
-              ? IconButton.outlined(
-                  tooltip: '新建文件夹',
-                  onPressed: onCreateFolder,
-                  icon: const Icon(Icons.create_new_folder_rounded),
-                )
-              : OutlinedButton.icon(
-                  onPressed: onCreateFolder,
-                  icon: const Icon(Icons.create_new_folder_rounded),
-                  label: const Text('新建'),
-                );
-          final compactActions = Row(
+          final createButton = _ToolbarButton(
+            icon: Icons.add_rounded,
+            label: '新建',
+            compact: compact,
+            onTap: onCreateFolder,
+            tooltip: '新建文件夹',
+          );
+          final actions = Row(
             mainAxisSize: MainAxisSize.min,
             children: [
               sortMenu,
-              SizedBox(width: actionGap),
+              const SizedBox(width: 4),
               directionButton,
-              SizedBox(width: actionGap),
-              viewSwitch,
-              SizedBox(width: actionGap),
+              const SizedBox(width: 4),
+              viewButton,
+              const SizedBox(width: 4),
               createButton,
             ],
           );
-          final desktopActions = Wrap(
-            spacing: 6,
-            runSpacing: 6,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [sortMenu, directionButton, viewSwitch, createButton],
-          );
-
-          if (compact) {
-            return Row(
-              children: [
-                Expanded(child: search),
-                const SizedBox(width: 8),
-                Flexible(
-                  child: SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: compactActions,
-                  ),
+          return Container(
+            padding: const EdgeInsets.fromLTRB(10, 9, 10, 9),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: const Color(0xFFE2E8F0)),
+              boxShadow: const [
+                BoxShadow(
+                  color: Color(0x0A000000),
+                  blurRadius: 12,
+                  offset: Offset(0, 5),
                 ),
               ],
-            );
-          }
-
-          return Row(
-            children: [
-              Expanded(child: search),
-              const SizedBox(width: 10),
-              desktopActions,
-            ],
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                search,
+                const SizedBox(height: 8),
+                _HeaderMeta(
+                  path: path,
+                  summary: summary,
+                  visibleCount: visibleCount,
+                  hasSearch: hasSearch,
+                  statusText: statusText,
+                  formatSize: formatSize,
+                  formatMtime: formatMtime,
+                  onOpenPath: onOpenPath,
+                  actions: actions,
+                ),
+              ],
+            ),
           );
         },
       ),
@@ -877,59 +910,99 @@ class _Toolbar extends StatelessWidget {
 class _ToolbarButton extends StatelessWidget {
   const _ToolbarButton({
     required this.icon,
-    required this.label,
+    this.label,
+    this.trailingIcon,
     this.selected = false,
     this.compact = false,
+    this.onTap,
+    this.tooltip,
   });
 
   final IconData icon;
-  final String label;
+  final String? label;
+  final IconData? trailingIcon;
   final bool selected;
   final bool compact;
+  final VoidCallback? onTap;
+  final String? tooltip;
 
   @override
   Widget build(BuildContext context) {
     final color = selected ? const Color(0xFF276EF1) : const Color(0xFF425466);
-    return Container(
-      height: 36,
+    final content = Container(
+      height: 32,
       padding: EdgeInsets.symmetric(horizontal: compact ? 8 : 10),
       decoration: BoxDecoration(
-        color: selected ? const Color(0xFFEAF1FF) : Colors.white,
+        color: selected ? const Color(0xFFF2F6FF) : Colors.white,
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: const Color(0xFFD7E0EA)),
+        border: Border.all(
+          color: selected ? const Color(0xFFC7D8FF) : const Color(0xFFD7E0EA),
+        ),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 18, color: color),
-          if (!compact) ...[
+          Icon(icon, size: 15, color: color),
+          if (label != null) ...[
             const SizedBox(width: 4),
-            Text(label, style: TextStyle(color: color)),
+            Text(
+              label!,
+              style: TextStyle(
+                color: color,
+                fontSize: 11,
+                height: 1,
+                fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+              ),
+            ),
+          ],
+          if (trailingIcon != null) ...[
+            const SizedBox(width: 2),
+            Icon(trailingIcon, size: 14, color: color),
           ],
         ],
       ),
     );
+
+    Widget button = content;
+    if (onTap != null) {
+      button = Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(8),
+          onTap: onTap,
+          child: content,
+        ),
+      );
+    }
+    if (tooltip != null) {
+      button = Tooltip(message: tooltip!, child: button);
+    }
+    return button;
   }
 }
 
-class _DirectoryStatusBar extends StatelessWidget {
-  const _DirectoryStatusBar({
+class _HeaderMeta extends StatelessWidget {
+  const _HeaderMeta({
     required this.path,
     required this.summary,
     required this.visibleCount,
     required this.hasSearch,
+    required this.statusText,
     required this.formatSize,
     required this.formatMtime,
     required this.onOpenPath,
+    required this.actions,
   });
 
   final String path;
   final _DirectorySummary summary;
   final int visibleCount;
   final bool hasSearch;
+  final String? statusText;
   final String Function(int) formatSize;
   final String Function(int) formatMtime;
   final ValueChanged<String> onOpenPath;
+  final Widget actions;
 
   @override
   Widget build(BuildContext context) {
@@ -938,65 +1011,69 @@ class _DirectoryStatusBar extends StatelessWidget {
         ? '全部文件'
         : path.split('/').where((item) => item.isNotEmpty).last;
     final totalCount = summary.folderCount + summary.fileCount;
-    final detailText = hasSearch
-        ? '匹配 $visibleCount 项 · 共 $totalCount 项'
-        : summary.latestMtime > 0
-        ? '${summary.folderCount} 个文件夹 · ${summary.fileCount} 个文件 · ${formatSize(summary.totalSize)} · 更新 ${formatMtime(summary.latestMtime)}'
-        : '${summary.folderCount} 个文件夹 · ${summary.fileCount} 个文件 · ${formatSize(summary.totalSize)}';
+    final detailText = statusText ??
+        (hasSearch
+            ? '匹配 $visibleCount 项 · 共 $totalCount 项'
+            : summary.latestMtime > 0
+            ? '${summary.folderCount} 个文件夹 · ${summary.fileCount} 个文件 · ${formatSize(summary.totalSize)} · 更新 ${formatMtime(summary.latestMtime)}'
+            : '${summary.folderCount} 个文件夹 · ${summary.fileCount} 个文件 · ${formatSize(summary.totalSize)}');
 
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 30,
-                height: 30,
-                decoration: BoxDecoration(
-                  color: const Color(0xFF276EF1).withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: const Icon(
-                  Icons.folder_rounded,
-                  color: Color(0xFF276EF1),
-                  size: 18,
-                ),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Container(
+              width: 24,
+              height: 24,
+              decoration: BoxDecoration(
+                color: const Color(0xFF276EF1).withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(6),
               ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      currentLabel,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.titleSmall?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      detailText,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: const Color(0xFF697586),
-                      ),
-                    ),
-                  ],
-                ),
+              child: const Icon(
+                Icons.folder_rounded,
+                color: Color(0xFF276EF1),
+                size: 15,
               ),
-            ],
-          ),
-          if (path != '/') ...[
-            const SizedBox(height: 6),
-            _BreadcrumbBar(path: path, onOpenPath: onOpenPath),
+            ),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    currentLabel,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 1),
+                  Text(
+                    detailText,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: const Color(0xFF697586),
+                      fontSize: 11,
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ],
+        ),
+        if (path != '/') ...[
+          const SizedBox(height: 2),
+          _BreadcrumbBar(path: path, onOpenPath: onOpenPath),
         ],
-      ),
+        const SizedBox(height: 8),
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: actions,
+        ),
+      ],
     );
   }
 }
@@ -1034,7 +1111,7 @@ class _BreadcrumbBar extends StatelessWidget {
 
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
-      padding: const EdgeInsets.only(top: 4),
+      padding: const EdgeInsets.only(top: 0),
       child: Row(children: chips),
     );
   }
@@ -1053,17 +1130,27 @@ class _BreadcrumbChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final color = selected
+        ? const Color(0xFF276EF1)
+        : const Color(0xFF5D6B7A);
     return Padding(
-      padding: const EdgeInsets.only(right: 4),
-      child: ActionChip(
-        onPressed: onTap,
-        avatar: selected
-            ? const Icon(Icons.folder_open_rounded, size: 18)
-            : null,
-        label: Text(label, overflow: TextOverflow.ellipsis),
-        backgroundColor: selected ? const Color(0xFFEAF1FF) : Colors.white,
-        side: const BorderSide(color: Color(0xFFD7E0EA)),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      padding: const EdgeInsets.only(right: 2),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(5),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
+          child: Text(
+            label,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: color,
+              fontSize: 11,
+              fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+              height: 1,
+            ),
+          ),
+        ),
       ),
     );
   }

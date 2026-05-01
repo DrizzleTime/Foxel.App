@@ -126,7 +126,7 @@ class _DriveShellPageState extends State<DriveShellPage> {
           Positioned(
             left: 20,
             right: 20,
-            bottom: 12,
+            bottom: 8,
             child: _FloatingBottomNav(
               currentIndex: _currentIndex,
               onSelected: _selectIndex,
@@ -240,32 +240,32 @@ class _FloatingBottomNav extends StatelessWidget {
     return SafeArea(
       top: false,
       child: SizedBox(
-        height: 84,
+        height: 74,
         child: ClipRRect(
-          borderRadius: BorderRadius.circular(34),
+          borderRadius: BorderRadius.circular(30),
           child: Stack(
             children: [
               BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 32, sigmaY: 32),
+                filter: ImageFilter.blur(sigmaX: 28, sigmaY: 28),
                 child: Container(
                   decoration: BoxDecoration(
                     gradient: LinearGradient(
                       colors: [
-                        const Color(0xFFF4F6F8).withValues(alpha: 0.72),
-                        const Color(0xFFD7DDE4).withValues(alpha: 0.48),
+                        const Color(0xFFF4F6F8).withValues(alpha: 0.76),
+                        const Color(0xFFD7DDE4).withValues(alpha: 0.50),
                       ],
                       begin: Alignment.topCenter,
                       end: Alignment.bottomCenter,
                     ),
-                    borderRadius: BorderRadius.circular(34),
+                    borderRadius: BorderRadius.circular(30),
                     border: Border.all(
                       color: Colors.white.withValues(alpha: 0.62),
                     ),
                     boxShadow: [
                       BoxShadow(
                         color: const Color(0xFF8B97AA).withValues(alpha: 0.12),
-                        blurRadius: 24,
-                        offset: const Offset(0, 12),
+                        blurRadius: 20,
+                        offset: const Offset(0, 10),
                       ),
                       BoxShadow(
                         color: Colors.white.withValues(alpha: 0.24),
@@ -277,12 +277,12 @@ class _FloatingBottomNav extends StatelessWidget {
                 ),
               ),
               Positioned(
-                left: 16,
-                right: 16,
-                top: 8,
+                left: 14,
+                right: 14,
+                top: 6,
                 child: IgnorePointer(
                   child: Container(
-                    height: 18,
+                    height: 14,
                     decoration: BoxDecoration(
                       borderRadius: BorderRadius.circular(999),
                       gradient: LinearGradient(
@@ -298,10 +298,10 @@ class _FloatingBottomNav extends StatelessWidget {
                 ),
               ),
               Padding(
-                padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
+                padding: const EdgeInsets.fromLTRB(6, 6, 6, 6),
                 child: LayoutBuilder(
                   builder: (context, constraints) {
-                    const segmentGap = 20.0;
+                    const segmentGap = 14.0;
                     final segmentWidth = constraints.maxWidth / _items.length;
                     return Stack(
                       children: [
@@ -309,9 +309,9 @@ class _FloatingBottomNav extends StatelessWidget {
                           duration: const Duration(milliseconds: 260),
                           curve: Curves.easeOutCubic,
                           left: segmentWidth * currentIndex + segmentGap / 2,
-                          top: 4,
+                          top: 2,
                           width: segmentWidth - segmentGap,
-                          height: constraints.maxHeight - 8,
+                          height: constraints.maxHeight - 4,
                           child: const _SelectedNavSegment(),
                         ),
                         Row(
@@ -355,11 +355,11 @@ class _FloatingNavButton extends StatelessWidget {
     const activeColor = Color(0xFF3366F5);
     const inactiveColor = Color(0xFF818791);
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 3),
+      padding: const EdgeInsets.symmetric(horizontal: 2),
       child: Material(
         type: MaterialType.transparency,
         child: InkWell(
-          borderRadius: BorderRadius.circular(26),
+          borderRadius: BorderRadius.circular(22),
           onTap: onTap,
           child: SizedBox.expand(
             child: Column(
@@ -371,18 +371,18 @@ class _FloatingNavButton extends StatelessWidget {
                   curve: Curves.easeOutCubic,
                   child: Icon(
                     selected ? item.selectedIcon : item.icon,
-                    size: 22,
+                    size: 20,
                     color: selected ? activeColor : inactiveColor,
                   ),
                 ),
-                const SizedBox(height: 5),
+                const SizedBox(height: 3),
                 AnimatedDefaultTextStyle(
                   duration: const Duration(milliseconds: 220),
                   curve: Curves.easeOutCubic,
                   style: Theme.of(context).textTheme.labelSmall!.copyWith(
                     color: selected ? activeColor : inactiveColor,
                     fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                    fontSize: 11,
+                    fontSize: 10,
                     letterSpacing: 0,
                     height: 1,
                   ),
@@ -407,18 +407,18 @@ class _SelectedNavSegment extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ClipRRect(
-      borderRadius: BorderRadius.circular(26),
+      borderRadius: BorderRadius.circular(22),
       child: Stack(
         children: [
           BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+            filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
             child: Container(
               decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(26),
+                borderRadius: BorderRadius.circular(22),
                 gradient: LinearGradient(
                   colors: [
-                    Colors.white.withValues(alpha: 0.62),
-                    const Color(0xFFE4E8EE).withValues(alpha: 0.40),
+                    Colors.white.withValues(alpha: 0.66),
+                    const Color(0xFFE4E8EE).withValues(alpha: 0.42),
                   ],
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,
@@ -427,20 +427,20 @@ class _SelectedNavSegment extends StatelessWidget {
                 boxShadow: [
                   BoxShadow(
                     color: const Color(0xFFACB7C8).withValues(alpha: 0.14),
-                    blurRadius: 14,
-                    offset: const Offset(0, 8),
+                    blurRadius: 12,
+                    offset: const Offset(0, 6),
                   ),
                 ],
               ),
             ),
           ),
           Positioned(
-            left: 10,
-            right: 10,
-            top: 4,
+            left: 8,
+            right: 8,
+            top: 3,
             child: IgnorePointer(
               child: Container(
-                height: 14,
+                height: 12,
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(999),
                   gradient: LinearGradient(
