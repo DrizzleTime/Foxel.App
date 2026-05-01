@@ -112,7 +112,13 @@ class FoxelApi {
   Future<void> uploadFile({
     required String remotePath,
     required String localPath,
+    void Function(int sent, int total)? onProgress,
   }) async {
+    final file = File(localPath);
+    final total = await file.length();
+    var sent = 0;
+    onProgress?.call(0, total);
+
     final request = http.MultipartRequest(
       'POST',
       _uri('/fs/upload/${path_utils.encodePath(remotePath)}', {
@@ -120,24 +126,54 @@ class FoxelApi {
       }),
     );
     request.headers.addAll(_headers());
-    request.files.add(await http.MultipartFile.fromPath('file', localPath));
+    request.files.add(
+      http.MultipartFile(
+        'file',
+        file.openRead().map((chunk) {
+          sent += chunk.length;
+          onProgress?.call(sent, total);
+          return chunk;
+        }),
+        total,
+        filename: remotePath.split('/').where((item) => item.isNotEmpty).last,
+      ),
+    );
     final streamed = await request.send();
     final response = await http.Response.fromStream(streamed);
     _decodeWrapped(response);
+    onProgress?.call(total, total);
   }
 
   Future<void> downloadFile({
     required String remotePath,
     required File outputFile,
+    void Function(int received, int? total)? onProgress,
   }) async {
-    final response = await _client.get(
+    final request = http.Request(
+      'GET',
       _uri('/fs/file/${path_utils.encodePath(remotePath)}'),
-      headers: _headers(),
     );
+    request.headers.addAll(_headers());
+    final response = await _client.send(request);
     if (response.statusCode < 200 || response.statusCode >= 300) {
-      _throwHttpError(response);
+      final body = await response.stream.toBytes();
+      _throwHttpError(http.Response.bytes(body, response.statusCode));
     }
-    await outputFile.writeAsBytes(response.bodyBytes);
+
+    final sink = outputFile.openWrite();
+    var received = 0;
+    final total = response.contentLength;
+    onProgress?.call(0, total);
+    try {
+      await for (final chunk in response.stream) {
+        received += chunk.length;
+        sink.add(chunk);
+        onProgress?.call(received, total);
+      }
+    } finally {
+      await sink.close();
+    }
+    onProgress?.call(received, total);
   }
 
   Future<void> mkdir(String path) async {

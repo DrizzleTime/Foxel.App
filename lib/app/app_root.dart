@@ -19,7 +19,6 @@ class _AppRootState extends State<AppRoot> {
   FoxelApi? _api;
   bool _loading = true;
   String _initialBaseUrl = '';
-  String _initialUsername = '';
 
   @override
   void initState() {
@@ -41,7 +40,6 @@ class _AppRootState extends State<AppRoot> {
     }
 
     _initialBaseUrl = session.baseUrl;
-    _initialUsername = session.username;
     final api = FoxelApi(baseUrl: session.baseUrl, token: session.token);
     try {
       final profile = await api.me();
@@ -57,7 +55,6 @@ class _AppRootState extends State<AppRoot> {
         _session = refreshed;
         _api = api;
         _loading = false;
-        _initialUsername = refreshed.username;
       });
     } catch (_) {
       api.close();
@@ -78,7 +75,6 @@ class _AppRootState extends State<AppRoot> {
       _session = normalized;
       _api = FoxelApi(baseUrl: normalized.baseUrl, token: normalized.token);
       _initialBaseUrl = normalized.baseUrl;
-      _initialUsername = normalized.username;
     });
   }
 
@@ -88,7 +84,6 @@ class _AppRootState extends State<AppRoot> {
       MaterialPageRoute<void>(
         builder: (_) => SettingsPage(
           initialBaseUrl: session?.baseUrl ?? _initialBaseUrl,
-          initialUsername: session?.username ?? _initialUsername,
           onLoggedIn: (newSession) {
             _handleLoggedIn(newSession);
             Navigator.of(context).pop();
@@ -118,7 +113,6 @@ class _AppRootState extends State<AppRoot> {
     if (session == null || api == null) {
       return SettingsPage(
         initialBaseUrl: _initialBaseUrl,
-        initialUsername: _initialUsername,
         onLoggedIn: _handleLoggedIn,
       );
     }

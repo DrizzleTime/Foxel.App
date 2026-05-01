@@ -4,9 +4,11 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import 'package:foxel/core/api/foxel_api.dart';
+import 'package:foxel/features/drive/controllers/transfer_task_controller.dart';
 import 'package:foxel/features/drive/pages/account_settings_page.dart';
 import 'package:foxel/features/drive/pages/file_browser_page.dart';
 import 'package:foxel/features/drive/pages/home_page.dart';
+import 'package:foxel/features/drive/pages/transfer_tasks_page.dart';
 
 class DriveShellPage extends StatefulWidget {
   const DriveShellPage({
@@ -36,7 +38,8 @@ class _DriveShellPageState extends State<DriveShellPage> {
   int _currentIndex = 0;
   int _previousIndex = 0;
   final Set<int> _visitedIndexes = {0};
-  final List<Widget?> _tabs = List<Widget?>.filled(3, null);
+  final List<Widget?> _tabs = List<Widget?>.filled(4, null);
+  final TransferTaskController _taskController = TransferTaskController();
 
   @override
   void initState() {
@@ -62,6 +65,12 @@ class _DriveShellPageState extends State<DriveShellPage> {
     }
   }
 
+  @override
+  void dispose() {
+    _taskController.dispose();
+    super.dispose();
+  }
+
   void _selectIndex(int index) {
     if (index == _currentIndex) {
       return;
@@ -81,14 +90,16 @@ class _DriveShellPageState extends State<DriveShellPage> {
         username: widget.username,
         avatarUrl: widget.avatarUrl,
         onOpenFiles: () => _selectIndex(1),
-        onOpenSettings: () => _selectIndex(2),
+        taskController: _taskController,
+        onOpenTasks: () => _selectIndex(2),
+        onOpenSettings: () => _selectIndex(3),
       ),
       1 => FileBrowserPage(
         api: widget.api,
-        username: widget.username,
-        onOpenSettings: () => _selectIndex(2),
-        onLogout: widget.onLogout,
+        taskController: _taskController,
+        onOpenTasks: () => _selectIndex(2),
       ),
+      2 => TransferTasksPage(controller: _taskController),
       _ => AccountSettingsPage(
         username: widget.username,
         email: widget.email,
@@ -145,7 +156,7 @@ class _LazyTabStage extends StatelessWidget {
     final direction = currentIndex >= previousIndex ? 1.0 : -1.0;
     return Stack(
       children: [
-        for (var index = 0; index < 3; index++)
+        for (var index = 0; index < tabs.length; index++)
           if (visitedIndexes.contains(index))
             _TabSlot(
               key: ValueKey('tab-$index'),
@@ -211,6 +222,11 @@ class _FloatingBottomNav extends StatelessWidget {
       label: '文件',
       icon: CupertinoIcons.folder,
       selectedIcon: CupertinoIcons.folder_fill,
+    ),
+    _NavItem(
+      label: '任务',
+      icon: CupertinoIcons.tray,
+      selectedIcon: CupertinoIcons.tray_fill,
     ),
     _NavItem(
       label: '设置',

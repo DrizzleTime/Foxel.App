@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import 'package:foxel/core/api/foxel_api.dart';
 import 'package:foxel/core/models/file_entry.dart';
+import 'package:foxel/features/drive/controllers/transfer_task_controller.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({
@@ -11,6 +12,8 @@ class HomePage extends StatefulWidget {
     required this.username,
     required this.avatarUrl,
     required this.onOpenFiles,
+    required this.taskController,
+    required this.onOpenTasks,
     required this.onOpenSettings,
   });
 
@@ -18,6 +21,8 @@ class HomePage extends StatefulWidget {
   final String username;
   final String avatarUrl;
   final VoidCallback onOpenFiles;
+  final TransferTaskController taskController;
+  final VoidCallback onOpenTasks;
   final VoidCallback onOpenSettings;
 
   @override
@@ -99,12 +104,18 @@ class _HomePageState extends State<HomePage> {
     if (file == null || localPath == null) {
       return;
     }
-    await _runAction(
-      () => widget.api.uploadFile(
-        remotePath: FoxelApi.joinPath('/', file.name),
-        localPath: localPath,
-      ),
+    widget.taskController.startUpload(
+      api: widget.api,
+      name: file.name,
+      remotePath: FoxelApi.joinPath('/', file.name),
+      localPath: localPath,
+      onSuccess: () {
+        if (mounted) {
+          _refresh();
+        }
+      },
     );
+    widget.onOpenTasks();
   }
 
   _HomeSummary _summaryFor(List<FileEntry> entries) {

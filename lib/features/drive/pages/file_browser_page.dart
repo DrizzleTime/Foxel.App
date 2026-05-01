@@ -2,11 +2,11 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
-import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'package:foxel/core/api/foxel_api.dart';
 import 'package:foxel/core/models/file_entry.dart';
+import 'package:foxel/features/drive/controllers/transfer_task_controller.dart';
 import 'package:foxel/features/media/pages/image_viewer_page.dart';
 import 'package:foxel/features/media/pages/video_player_page.dart';
 
@@ -18,15 +18,13 @@ class FileBrowserPage extends StatefulWidget {
   const FileBrowserPage({
     super.key,
     required this.api,
-    required this.username,
-    required this.onOpenSettings,
-    required this.onLogout,
+    required this.taskController,
+    required this.onOpenTasks,
   });
 
   final FoxelApi api;
-  final String username;
-  final VoidCallback onOpenSettings;
-  final VoidCallback onLogout;
+  final TransferTaskController taskController;
+  final VoidCallback onOpenTasks;
 
   @override
   State<FileBrowserPage> createState() => _FileBrowserPageState();
@@ -134,9 +132,18 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
       return;
     }
     final remotePath = FoxelApi.joinPath(_path, file.name);
-    await _runAction(
-      () => widget.api.uploadFile(remotePath: remotePath, localPath: localPath),
+    widget.taskController.startUpload(
+      api: widget.api,
+      name: file.name,
+      remotePath: remotePath,
+      localPath: localPath,
+      onSuccess: () {
+        if (mounted) {
+          _refresh();
+        }
+      },
     );
+    widget.onOpenTasks();
   }
 
   Future<void> _renameEntry(FileEntry entry) async {
@@ -221,13 +228,20 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
       return;
     }
     try {
-      final dir = await getApplicationDocumentsDirectory();
+      final dir =
+          await getDownloadsDirectory() ??
+          await getApplicationDocumentsDirectory();
+      if (!await dir.exists()) {
+        await dir.create(recursive: true);
+      }
       final output = File('${dir.path}/${entry.name}');
-      await widget.api.downloadFile(
+      widget.taskController.startDownload(
+        api: widget.api,
+        name: entry.name,
         remotePath: FoxelApi.joinPath(_path, entry.name),
         outputFile: output,
       );
-      await OpenFilex.open(output.path);
+      widget.onOpenTasks();
     } catch (error) {
       if (mounted) {
         _showMessage(error.toString());
@@ -516,13 +530,6 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
           bottom: false,
           child: Column(
             children: [
-              _DriveHeader(
-                path: _path,
-                username: widget.username,
-                onRefresh: _refresh,
-                onOpenSettings: widget.onOpenSettings,
-                onLogout: widget.onLogout,
-              ),
               _Toolbar(
                 controller: _searchController,
                 query: _searchQuery,
@@ -549,7 +556,6 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
                   setState(() => _viewMode = mode);
                 },
                 onCreateFolder: _createFolder,
-                onUploadFile: _uploadFile,
               ),
               Expanded(
                 child: FutureBuilder<DirectoryListing>(
@@ -577,29 +583,16 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
                         physics: const AlwaysScrollableScrollPhysics(),
                         slivers: [
                           SliverToBoxAdapter(
-                            child: _OverviewSection(
+                            child: _DirectoryStatusBar(
+                              path: _path,
                               summary: summary,
-                              filteredCount: hasSearch
-                                  ? visibleEntries.length
-                                  : null,
+                              visibleCount: visibleEntries.length,
+                              hasSearch: hasSearch,
                               formatSize: _formatSize,
                               formatMtime: _formatMtime,
-                            ),
-                          ),
-                          SliverToBoxAdapter(
-                            child: _BreadcrumbBar(
-                              path: _path,
                               onOpenPath: _openPath,
                             ),
                           ),
-                          if (_path != '/')
-                            SliverToBoxAdapter(
-                              child: _ParentDirectoryTile(
-                                parentPath: FoxelApi.parentPath(_path),
-                                onTap: () =>
-                                    _openPath(FoxelApi.parentPath(_path)),
-                              ),
-                            ),
                           if (entries.isEmpty)
                             SliverFillRemaining(
                               hasScrollBody: false,
@@ -655,7 +648,7 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
                               onMore: _showEntryActions,
                             ),
                           const SliverToBoxAdapter(
-                            child: SizedBox(height: 136),
+                            child: SizedBox(height: 120),
                           ),
                         ],
                       ),
@@ -707,124 +700,6 @@ class _DirectorySummary {
   final int latestMtime;
 }
 
-class _DriveHeader extends StatelessWidget {
-  const _DriveHeader({
-    required this.path,
-    required this.username,
-    required this.onRefresh,
-    required this.onOpenSettings,
-    required this.onLogout,
-  });
-
-  final String path;
-  final String username;
-  final VoidCallback onRefresh;
-  final VoidCallback onOpenSettings;
-  final VoidCallback onLogout;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Container(
-      padding: const EdgeInsets.fromLTRB(16, 14, 12, 12),
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        border: Border(bottom: BorderSide(color: Color(0xFFE3E9F0))),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 42,
-            height: 42,
-            decoration: BoxDecoration(
-              color: const Color(0xFF276EF1).withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: const Icon(
-              Icons.cloud_queue_rounded,
-              color: Color(0xFF276EF1),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Foxel Drive',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: theme.textTheme.titleLarge?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  path == '/' ? '全部文件' : path,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: const Color(0xFF5D6B7A),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          IconButton(
-            tooltip: '刷新',
-            onPressed: onRefresh,
-            icon: const Icon(Icons.refresh_rounded),
-          ),
-          PopupMenuButton<String>(
-            tooltip: '账户',
-            onSelected: (value) {
-              if (value == 'settings') {
-                onOpenSettings();
-              } else if (value == 'logout') {
-                onLogout();
-              }
-            },
-            itemBuilder: (context) => [
-              PopupMenuItem(
-                enabled: false,
-                child: Row(
-                  children: [
-                    const Icon(Icons.person_rounded),
-                    const SizedBox(width: 10),
-                    Flexible(
-                      child: Text(
-                        username,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const PopupMenuDivider(),
-              const PopupMenuItem(value: 'settings', child: Text('设置')),
-              const PopupMenuItem(value: 'logout', child: Text('退出登录')),
-            ],
-            child: CircleAvatar(
-              radius: 18,
-              backgroundColor: const Color(0xFFEAF1FF),
-              child: Text(
-                username.isEmpty
-                    ? 'F'
-                    : username.characters.first.toUpperCase(),
-                style: const TextStyle(
-                  color: Color(0xFF276EF1),
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 class _Toolbar extends StatelessWidget {
   const _Toolbar({
     required this.controller,
@@ -839,7 +714,6 @@ class _Toolbar extends StatelessWidget {
     required this.onToggleSortDirection,
     required this.onViewModeChanged,
     required this.onCreateFolder,
-    required this.onUploadFile,
   });
 
   final TextEditingController controller;
@@ -854,34 +728,50 @@ class _Toolbar extends StatelessWidget {
   final VoidCallback onToggleSortDirection;
   final ValueChanged<_ViewMode> onViewModeChanged;
   final VoidCallback onCreateFolder;
-  final VoidCallback onUploadFile;
 
   @override
   Widget build(BuildContext context) {
     return Container(
       color: Colors.white,
-      padding: const EdgeInsets.fromLTRB(16, 4, 16, 14),
+      padding: const EdgeInsets.fromLTRB(16, 2, 16, 8),
       child: LayoutBuilder(
         builder: (context, constraints) {
           final compact = constraints.maxWidth < 720;
+          final actionGap = compact ? 4.0 : 6.0;
           final search = TextField(
             controller: controller,
             onChanged: onSearchChanged,
             decoration: InputDecoration(
               hintText: '搜索当前目录',
-              prefixIcon: const Icon(Icons.search_rounded),
+              prefixIconConstraints: const BoxConstraints(
+                minWidth: 36,
+                minHeight: 36,
+              ),
+              prefixIcon: const Icon(Icons.search_rounded, size: 18),
               suffixIcon: query.isEmpty
                   ? null
                   : IconButton(
                       tooltip: '清空搜索',
                       onPressed: onClearSearch,
+                      padding: EdgeInsets.zero,
+                      visualDensity: VisualDensity.compact,
+                      constraints: const BoxConstraints(
+                        minWidth: 32,
+                        minHeight: 32,
+                      ),
+                      iconSize: 18,
                       icon: const Icon(Icons.close_rounded),
                     ),
+              suffixIconConstraints: const BoxConstraints(
+                minWidth: 32,
+                minHeight: 32,
+              ),
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(8),
                 borderSide: BorderSide.none,
               ),
-              contentPadding: const EdgeInsets.symmetric(vertical: 12),
+              isDense: true,
+              contentPadding: const EdgeInsets.symmetric(vertical: 10),
             ),
           );
           final sortMenu = PopupMenuButton<_SortField>(
@@ -937,36 +827,45 @@ class _Toolbar extends StatelessWidget {
                   icon: const Icon(Icons.create_new_folder_rounded),
                   label: const Text('新建'),
                 );
-          final uploadButton = FilledButton.icon(
-            onPressed: onUploadFile,
-            icon: const Icon(Icons.upload_file_rounded),
-            label: const Text('上传'),
-          );
-          final actions = Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            crossAxisAlignment: WrapCrossAlignment.center,
+          final compactActions = Row(
+            mainAxisSize: MainAxisSize.min,
             children: [
               sortMenu,
+              SizedBox(width: actionGap),
               directionButton,
+              SizedBox(width: actionGap),
               viewSwitch,
+              SizedBox(width: actionGap),
               createButton,
-              if (!compact) uploadButton,
             ],
+          );
+          final desktopActions = Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [sortMenu, directionButton, viewSwitch, createButton],
           );
 
           if (compact) {
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [search, const SizedBox(height: 10), actions],
+            return Row(
+              children: [
+                Expanded(child: search),
+                const SizedBox(width: 8),
+                Flexible(
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: compactActions,
+                  ),
+                ),
+              ],
             );
           }
 
           return Row(
             children: [
               Expanded(child: search),
-              const SizedBox(width: 12),
-              actions,
+              const SizedBox(width: 10),
+              desktopActions,
             ],
           );
         },
@@ -992,8 +891,8 @@ class _ToolbarButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final color = selected ? const Color(0xFF276EF1) : const Color(0xFF425466);
     return Container(
-      height: 40,
-      padding: EdgeInsets.symmetric(horizontal: compact ? 10 : 12),
+      height: 36,
+      padding: EdgeInsets.symmetric(horizontal: compact ? 8 : 10),
       decoration: BoxDecoration(
         color: selected ? const Color(0xFFEAF1FF) : Colors.white,
         borderRadius: BorderRadius.circular(8),
@@ -1002,9 +901,9 @@ class _ToolbarButton extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 20, color: color),
+          Icon(icon, size: 18, color: color),
           if (!compact) ...[
-            const SizedBox(width: 6),
+            const SizedBox(width: 4),
             Text(label, style: TextStyle(color: color)),
           ],
         ],
@@ -1013,127 +912,89 @@ class _ToolbarButton extends StatelessWidget {
   }
 }
 
-class _OverviewSection extends StatelessWidget {
-  const _OverviewSection({
+class _DirectoryStatusBar extends StatelessWidget {
+  const _DirectoryStatusBar({
+    required this.path,
     required this.summary,
+    required this.visibleCount,
+    required this.hasSearch,
     required this.formatSize,
     required this.formatMtime,
-    this.filteredCount,
+    required this.onOpenPath,
   });
 
+  final String path;
   final _DirectorySummary summary;
+  final int visibleCount;
+  final bool hasSearch;
   final String Function(int) formatSize;
   final String Function(int) formatMtime;
-  final int? filteredCount;
+  final ValueChanged<String> onOpenPath;
 
   @override
   Widget build(BuildContext context) {
-    final items = [
-      _StatPill(
-        icon: Icons.folder_rounded,
-        label: '文件夹',
-        value: '${summary.folderCount}',
-        color: const Color(0xFF276EF1),
-      ),
-      _StatPill(
-        icon: Icons.insert_drive_file_rounded,
-        label: '文件',
-        value: '${summary.fileCount}',
-        color: const Color(0xFF17A673),
-      ),
-      _StatPill(
-        icon: Icons.storage_rounded,
-        label: '占用',
-        value: formatSize(summary.totalSize),
-        color: const Color(0xFF8A5CF6),
-      ),
-      _StatPill(
-        icon: Icons.schedule_rounded,
-        label: '最近更新',
-        value: formatMtime(summary.latestMtime),
-        color: const Color(0xFFD97706),
-      ),
-      if (filteredCount != null)
-        _StatPill(
-          icon: Icons.filter_alt_rounded,
-          label: '匹配',
-          value: '$filteredCount 项',
-          color: const Color(0xFF425466),
-        ),
-    ];
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-      child: Row(
+    final theme = Theme.of(context);
+    final currentLabel = path == '/'
+        ? '全部文件'
+        : path.split('/').where((item) => item.isNotEmpty).last;
+    final totalCount = summary.folderCount + summary.fileCount;
+    final detailText = hasSearch
+        ? '匹配 $visibleCount 项 · 共 $totalCount 项'
+        : summary.latestMtime > 0
+        ? '${summary.folderCount} 个文件夹 · ${summary.fileCount} 个文件 · ${formatSize(summary.totalSize)} · 更新 ${formatMtime(summary.latestMtime)}'
+        : '${summary.folderCount} 个文件夹 · ${summary.fileCount} 个文件 · ${formatSize(summary.totalSize)}';
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          for (final item in items)
-            Padding(padding: const EdgeInsets.only(right: 10), child: item),
-        ],
-      ),
-    );
-  }
-}
-
-class _StatPill extends StatelessWidget {
-  const _StatPill({
-    required this.icon,
-    required this.label,
-    required this.value,
-    required this.color,
-  });
-
-  final IconData icon;
-  final String label;
-  final String value;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 148,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: const Color(0xFFE1E7EF)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 32,
-            height: 32,
-            decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Icon(icon, color: color, size: 18),
-          ),
-          const SizedBox(width: 10),
-          Flexible(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                    color: const Color(0xFF697586),
-                  ),
+          Row(
+            children: [
+              Container(
+                width: 30,
+                height: 30,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF276EF1).withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8),
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  value,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(
-                    context,
-                  ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+                child: const Icon(
+                  Icons.folder_rounded,
+                  color: Color(0xFF276EF1),
+                  size: 18,
                 ),
-              ],
-            ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      currentLabel,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      detailText,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: const Color(0xFF697586),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
+          if (path != '/') ...[
+            const SizedBox(height: 6),
+            _BreadcrumbBar(path: path, onOpenPath: onOpenPath),
+          ],
         ],
       ),
     );
@@ -1173,7 +1034,7 @@ class _BreadcrumbBar extends StatelessWidget {
 
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
-      padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+      padding: const EdgeInsets.only(top: 4),
       child: Row(children: chips),
     );
   }
@@ -1203,51 +1064,6 @@ class _BreadcrumbChip extends StatelessWidget {
         backgroundColor: selected ? const Color(0xFFEAF1FF) : Colors.white,
         side: const BorderSide(color: Color(0xFFD7E0EA)),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-      ),
-    );
-  }
-}
-
-class _ParentDirectoryTile extends StatelessWidget {
-  const _ParentDirectoryTile({required this.parentPath, required this.onTap});
-
-  final String parentPath;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-      child: Material(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(8),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(8),
-          onTap: onTap,
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: Row(
-              children: [
-                const Icon(Icons.drive_folder_upload_rounded),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text('上级目录'),
-                      Text(
-                        parentPath,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
       ),
     );
   }
@@ -1292,9 +1108,9 @@ class _FileGrid extends StatelessWidget {
         return SliverPadding(
           padding: EdgeInsets.fromLTRB(
             compact ? 12 : 16,
-            4,
+            2,
             compact ? 12 : 16,
-            16,
+            12,
           ),
           sliver: SliverGrid(
             delegate: SliverChildBuilderDelegate((context, index) {
@@ -1314,7 +1130,7 @@ class _FileGrid extends StatelessWidget {
               crossAxisCount: crossAxisCount,
               crossAxisSpacing: compact ? 8 : 10,
               mainAxisSpacing: compact ? 8 : 10,
-              childAspectRatio: compact ? 0.76 : 0.82,
+              childAspectRatio: compact ? 0.88 : 0.9,
             ),
           ),
         );
@@ -1355,24 +1171,24 @@ class _FileGridTile extends StatelessWidget {
         onTap: onOpen,
         onLongPress: onMore,
         child: Padding(
-          padding: const EdgeInsets.all(10),
+          padding: const EdgeInsets.all(8),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Expanded(
                 child: _EntryVisual(api: api, entry: entry, fullPath: fullPath),
               ),
-              const SizedBox(height: 10),
+              const SizedBox(height: 8),
               Text(
                 entry.name,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
                 style: theme.textTheme.bodyMedium?.copyWith(
                   fontWeight: FontWeight.w600,
-                  height: 1.15,
+                  height: 1.1,
                 ),
               ),
-              const SizedBox(height: 4),
+              const SizedBox(height: 3),
               Row(
                 children: [
                   Expanded(
@@ -1388,8 +1204,8 @@ class _FileGridTile extends StatelessWidget {
                     ),
                   ),
                   SizedBox(
-                    width: 32,
-                    height: 32,
+                    width: 28,
+                    height: 28,
                     child: IconButton(
                       tooltip: '更多',
                       padding: EdgeInsets.zero,
@@ -1485,16 +1301,16 @@ class _FileListTile extends StatelessWidget {
         onTap: onOpen,
         onLongPress: onMore,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
+          padding: const EdgeInsets.fromLTRB(10, 8, 6, 8),
           child: Row(
             children: [
               _EntryVisual(
                 api: api,
                 entry: entry,
                 fullPath: fullPath,
-                size: 52,
+                size: 48,
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: 10),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -1507,7 +1323,7 @@ class _FileListTile extends StatelessWidget {
                         fontWeight: FontWeight.w600,
                       ),
                     ),
-                    const SizedBox(height: 4),
+                    const SizedBox(height: 3),
                     Text(
                       entry.isDir
                           ? fileKind(entry)
@@ -1523,6 +1339,7 @@ class _FileListTile extends StatelessWidget {
               ),
               IconButton(
                 tooltip: '更多',
+                visualDensity: VisualDensity.compact,
                 onPressed: onMore,
                 icon: const Icon(Icons.more_horiz_rounded),
               ),
@@ -1567,8 +1384,8 @@ class _EntryVisual extends StatelessWidget {
                 Align(
                   alignment: Alignment.center,
                   child: Container(
-                    width: 38,
-                    height: 38,
+                    width: 34,
+                    height: 34,
                     decoration: BoxDecoration(
                       color: Colors.black.withValues(alpha: 0.48),
                       shape: BoxShape.circle,
@@ -1576,6 +1393,7 @@ class _EntryVisual extends StatelessWidget {
                     child: const Icon(
                       Icons.play_arrow_rounded,
                       color: Colors.white,
+                      size: 20,
                     ),
                   ),
                 ),
@@ -1681,7 +1499,7 @@ class _IconPreview extends StatelessWidget {
         color: color.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(8),
       ),
-      child: Icon(icon, color: color, size: 34),
+      child: Icon(icon, color: color, size: 30),
     );
   }
 }
