@@ -1,5 +1,7 @@
-import 'package:flutter/material.dart';
 import 'dart:ui';
+
+import 'package:flutter/cupertino.dart';
+import 'package:flutter/material.dart';
 
 import 'package:foxel/core/api/foxel_api.dart';
 import 'package:foxel/features/drive/pages/account_settings_page.dart';
@@ -202,18 +204,18 @@ class _FloatingBottomNav extends StatelessWidget {
   static const _items = [
     _NavItem(
       label: '首页',
-      icon: Icons.home_outlined,
-      selectedIcon: Icons.home_rounded,
+      icon: CupertinoIcons.house,
+      selectedIcon: CupertinoIcons.house_fill,
     ),
     _NavItem(
       label: '文件',
-      icon: Icons.folder_outlined,
-      selectedIcon: Icons.folder_rounded,
+      icon: CupertinoIcons.folder,
+      selectedIcon: CupertinoIcons.folder_fill,
     ),
     _NavItem(
       label: '设置',
-      icon: Icons.settings_outlined,
-      selectedIcon: Icons.settings_rounded,
+      icon: CupertinoIcons.gear_alt,
+      selectedIcon: CupertinoIcons.gear_alt_fill,
     ),
   ];
 
@@ -221,37 +223,99 @@ class _FloatingBottomNav extends StatelessWidget {
   Widget build(BuildContext context) {
     return SafeArea(
       top: false,
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(30),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
-          child: Container(
-            height: 70,
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.72),
-              borderRadius: BorderRadius.circular(30),
-              border: Border.all(color: Colors.white.withValues(alpha: 0.55)),
-              boxShadow: [
-                BoxShadow(
-                  color: const Color(0xFF102A43).withValues(alpha: 0.10),
-                  blurRadius: 24,
-                  offset: const Offset(0, 12),
+      child: SizedBox(
+        height: 84,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(34),
+          child: Stack(
+            children: [
+              BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 32, sigmaY: 32),
+                child: Container(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [
+                        const Color(0xFFF4F6F8).withValues(alpha: 0.72),
+                        const Color(0xFFD7DDE4).withValues(alpha: 0.48),
+                      ],
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                    ),
+                    borderRadius: BorderRadius.circular(34),
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.62),
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: const Color(0xFF8B97AA).withValues(alpha: 0.12),
+                        blurRadius: 24,
+                        offset: const Offset(0, 12),
+                      ),
+                      BoxShadow(
+                        color: Colors.white.withValues(alpha: 0.24),
+                        blurRadius: 1,
+                        offset: const Offset(0, 1),
+                      ),
+                    ],
+                  ),
                 ),
-              ],
-            ),
-            child: Row(
-              children: [
-                for (var index = 0; index < _items.length; index++)
-                  Expanded(
-                    child: _FloatingNavButton(
-                      item: _items[index],
-                      selected: index == currentIndex,
-                      onTap: () => onSelected(index),
+              ),
+              Positioned(
+                left: 16,
+                right: 16,
+                top: 8,
+                child: IgnorePointer(
+                  child: Container(
+                    height: 18,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(999),
+                      gradient: LinearGradient(
+                        colors: [
+                          Colors.white.withValues(alpha: 0.56),
+                          Colors.white.withValues(alpha: 0.04),
+                        ],
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                      ),
                     ),
                   ),
-              ],
-            ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    const segmentGap = 20.0;
+                    final segmentWidth = constraints.maxWidth / _items.length;
+                    return Stack(
+                      children: [
+                        AnimatedPositioned(
+                          duration: const Duration(milliseconds: 260),
+                          curve: Curves.easeOutCubic,
+                          left: segmentWidth * currentIndex + segmentGap / 2,
+                          top: 4,
+                          width: segmentWidth - segmentGap,
+                          height: constraints.maxHeight - 8,
+                          child: const _SelectedNavSegment(),
+                        ),
+                        Row(
+                          children: [
+                            for (var index = 0; index < _items.length; index++)
+                              Expanded(
+                                child: _FloatingNavButton(
+                                  item: _items[index],
+                                  selected: index == currentIndex,
+                                  onTap: () => onSelected(index),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ],
+                    );
+                  },
+                ),
+              ),
+            ],
           ),
         ),
       ),
@@ -272,69 +336,110 @@ class _FloatingNavButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final activeColor = Theme.of(context).colorScheme.primary;
-    final inactiveColor = const Color(0xFF536170);
-    return InkWell(
-      borderRadius: BorderRadius.circular(18),
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 160),
-        curve: Curves.easeOutCubic,
-        height: 56,
-        margin: const EdgeInsets.symmetric(horizontal: 2),
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-        decoration: BoxDecoration(
-          color: selected ? const Color(0xFFDDE9FF) : Colors.transparent,
-          borderRadius: BorderRadius.circular(18),
+    const activeColor = Color(0xFF3366F5);
+    const inactiveColor = Color(0xFF818791);
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 3),
+      child: Material(
+        type: MaterialType.transparency,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(26),
+          onTap: onTap,
+          child: SizedBox.expand(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                AnimatedScale(
+                  scale: selected ? 1 : 0.96,
+                  duration: const Duration(milliseconds: 220),
+                  curve: Curves.easeOutCubic,
+                  child: Icon(
+                    selected ? item.selectedIcon : item.icon,
+                    size: 22,
+                    color: selected ? activeColor : inactiveColor,
+                  ),
+                ),
+                const SizedBox(height: 5),
+                AnimatedDefaultTextStyle(
+                  duration: const Duration(milliseconds: 220),
+                  curve: Curves.easeOutCubic,
+                  style: Theme.of(context).textTheme.labelSmall!.copyWith(
+                    color: selected ? activeColor : inactiveColor,
+                    fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                    fontSize: 11,
+                    letterSpacing: 0,
+                    height: 1,
+                  ),
+                  child: Text(
+                    item.label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            AnimatedContainer(
-              duration: const Duration(milliseconds: 160),
-              width: selected ? 46 : 40,
-              height: selected ? 28 : 24,
+      ),
+    );
+  }
+}
+
+class _SelectedNavSegment extends StatelessWidget {
+  const _SelectedNavSegment();
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(26),
+      child: Stack(
+        children: [
+          BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+            child: Container(
               decoration: BoxDecoration(
-                gradient: selected
-                    ? const LinearGradient(
-                        colors: [Color(0xFF2D6BFF), Color(0xFF6DB7FF)],
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                      )
-                    : null,
-                color: selected ? null : Colors.transparent,
-                borderRadius: BorderRadius.circular(999),
-              ),
-              child: TweenAnimationBuilder<double>(
-                tween: Tween<double>(end: selected ? 1 : 0),
-                duration: const Duration(milliseconds: 160),
-                curve: Curves.easeOutCubic,
-                builder: (context, value, _) {
-                  return Transform.scale(
-                    scale: 0.9 + value * 0.1,
-                    child: Icon(
-                      selected ? item.selectedIcon : item.icon,
-                      size: 20,
-                      color: selected ? Colors.white : inactiveColor,
-                    ),
-                  );
-                },
+                borderRadius: BorderRadius.circular(26),
+                gradient: LinearGradient(
+                  colors: [
+                    Colors.white.withValues(alpha: 0.62),
+                    const Color(0xFFE4E8EE).withValues(alpha: 0.40),
+                  ],
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                ),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.52)),
+                boxShadow: [
+                  BoxShadow(
+                    color: const Color(0xFFACB7C8).withValues(alpha: 0.14),
+                    blurRadius: 14,
+                    offset: const Offset(0, 8),
+                  ),
+                ],
               ),
             ),
-            const SizedBox(height: 2),
-            Text(
-              item.label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                color: selected ? activeColor : inactiveColor,
-                fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
-                height: 1,
-                fontSize: 11,
+          ),
+          Positioned(
+            left: 10,
+            right: 10,
+            top: 4,
+            child: IgnorePointer(
+              child: Container(
+                height: 14,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(999),
+                  gradient: LinearGradient(
+                    colors: [
+                      Colors.white.withValues(alpha: 0.70),
+                      Colors.white.withValues(alpha: 0.08),
+                    ],
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                  ),
+                ),
               ),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
