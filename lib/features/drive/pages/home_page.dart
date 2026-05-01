@@ -192,7 +192,7 @@ class _HomePageState extends State<HomePage> {
 
               return ListView(
                 physics: const AlwaysScrollableScrollPhysics(),
-                padding: const EdgeInsets.fromLTRB(20, 18, 20, 126),
+                padding: const EdgeInsets.fromLTRB(20, 18, 20, 118),
                 children: [
                   _HomeHeader(
                     username: widget.username,
@@ -821,15 +821,15 @@ class _RecentList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(vertical: 6),
+      clipBehavior: Clip.hardEdge,
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(22),
+        borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFF102A43).withValues(alpha: 0.06),
-            blurRadius: 24,
-            offset: const Offset(0, 12),
+            color: const Color(0xFF102A43).withValues(alpha: 0.05),
+            blurRadius: 18,
+            offset: const Offset(0, 10),
           ),
         ],
       ),
@@ -851,9 +851,9 @@ class _RecentList extends StatelessWidget {
             if (index != entries.length - 1)
               const Divider(
                 height: 1,
-                indent: 72,
-                endIndent: 16,
-                color: Color(0xFFE7ECF3),
+                indent: 66,
+                endIndent: 14,
+                color: Color(0xFFEAF0F6),
               ),
           ],
         ],
@@ -886,11 +886,11 @@ class _RecentTile extends StatelessWidget {
       child: InkWell(
         onTap: onTap,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
           child: Row(
             children: [
               _EntryThumb(api: api, entry: entry, fullPath: fullPath),
-              const SizedBox(width: 12),
+              const SizedBox(width: 10),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -916,7 +916,7 @@ class _RecentTile extends StatelessWidget {
                   ],
                 ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 6),
               Text(
                 trailing,
                 style: Theme.of(context).textTheme.labelSmall?.copyWith(
@@ -949,12 +949,12 @@ class _EntryThumb extends StatelessWidget {
     final color = _colorFor(entry);
     if (!entry.isDir && (entry.hasThumbnail == true || _isImage(entry.name))) {
       return ClipRRect(
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(10),
         child: Image.network(
           api.thumbnailUri(fullPath, width: 120, height: 120).toString(),
           headers: api.authHeaders(),
-          width: 46,
-          height: 46,
+          width: 42,
+          height: 42,
           fit: BoxFit.cover,
           errorBuilder: (_, _, _) => _IconBox(icon: icon, color: color),
         ),
@@ -973,13 +973,13 @@ class _IconBox extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 46,
-      height: 46,
+      width: 42,
+      height: 42,
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(11),
       ),
-      child: Icon(icon, color: color),
+      child: Icon(icon, color: color, size: 22),
     );
   }
 }
@@ -993,10 +993,10 @@ class _EmptyRecent extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(color: const Color(0xFFE1E7EF)),
       ),
       child: Column(
