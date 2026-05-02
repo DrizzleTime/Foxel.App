@@ -380,69 +380,124 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
               ],
             ),
             const SizedBox(height: 10),
-            Row(
-              children: [
-                IconButton(
-                  onPressed: () => _seekBy(-_seekStep),
-                  icon: const Icon(Icons.replay_10_rounded),
-                  color: Colors.white,
-                  tooltip: '快退 10 秒',
-                ),
-                IconButton.filled(
-                  onPressed: _togglePlay,
-                  iconSize: 30,
-                  icon: Icon(
-                    _controller.value.isPlaying
-                        ? Icons.pause_rounded
-                        : Icons.play_arrow_rounded,
-                  ),
-                  tooltip: _controller.value.isPlaying ? '暂停' : '播放',
-                ),
-                IconButton(
-                  onPressed: () => _seekBy(_seekStep),
-                  icon: const Icon(Icons.forward_10_rounded),
-                  color: Colors.white,
-                  tooltip: '快进 10 秒',
-                ),
-                const Spacer(),
-                _SpeedMenu(
-                  value: _playbackSpeed,
-                  speeds: _playbackSpeeds,
-                  onSelected: _setPlaybackSpeed,
-                ),
-                const SizedBox(width: 12),
-                _VolumeControl(
-                  value: _volume,
-                  onChanged: _setVolume,
-                  onMute: _toggleMute,
-                ),
-                const SizedBox(width: 4),
-                IconButton(
-                  onPressed: _toggleOrientation,
-                  icon: Icon(
-                    _isLandscape
-                        ? Icons.stay_current_portrait_rounded
-                        : Icons.stay_current_landscape_rounded,
-                  ),
-                  color: Colors.white,
-                  tooltip: _isLandscape ? '切换竖屏' : '切换横屏',
-                ),
-                const SizedBox(width: 4),
-                IconButton(
-                  onPressed: _toggleFullScreen,
-                  icon: Icon(
-                    _isFullScreen
-                        ? Icons.fullscreen_exit_rounded
-                        : Icons.fullscreen_rounded,
-                  ),
-                  color: Colors.white,
-                  tooltip: _isFullScreen ? '退出全屏' : '全屏',
-                ),
-              ],
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final compact = constraints.maxWidth < 430;
+                if (compact) {
+                  return Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: _playbackButtons(),
+                      ),
+                      const SizedBox(height: 4),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          _SpeedMenu(
+                            value: _playbackSpeed,
+                            speeds: _playbackSpeeds,
+                            onSelected: _setPlaybackSpeed,
+                          ),
+                          const SizedBox(width: 8),
+                          IconButton(
+                            onPressed: _toggleMute,
+                            icon: Icon(
+                              _volume == 0
+                                  ? Icons.volume_off_rounded
+                                  : Icons.volume_up_rounded,
+                            ),
+                            color: Colors.white,
+                            tooltip: _volume == 0 ? '恢复音量' : '静音',
+                          ),
+                          _orientationButton(),
+                          _fullScreenButton(),
+                        ],
+                      ),
+                    ],
+                  );
+                }
+
+                return Row(
+                  children: [
+                    ..._playbackButtons(),
+                    const Spacer(),
+                    _SpeedMenu(
+                      value: _playbackSpeed,
+                      speeds: _playbackSpeeds,
+                      onSelected: _setPlaybackSpeed,
+                    ),
+                    const SizedBox(width: 12),
+                    _VolumeControl(
+                      value: _volume,
+                      onChanged: _setVolume,
+                      onMute: _toggleMute,
+                    ),
+                    const SizedBox(width: 4),
+                    _orientationButton(),
+                    const SizedBox(width: 4),
+                    _fullScreenButton(),
+                  ],
+                );
+              },
             ),
           ],
         ),
       ),
+    );
+  }
+
+  List<Widget> _playbackButtons() {
+    return [
+      IconButton(
+        onPressed: () => _seekBy(-_seekStep),
+        icon: const Icon(Icons.replay_10_rounded),
+        color: Colors.white,
+        tooltip: '快退 10 秒',
+      ),
+      IconButton.filled(
+        onPressed: _togglePlay,
+        iconSize: 30,
+        icon: Icon(
+          _controller.value.isPlaying
+              ? Icons.pause_rounded
+              : Icons.play_arrow_rounded,
+        ),
+        tooltip: _controller.value.isPlaying ? '暂停' : '播放',
+      ),
+      IconButton(
+        onPressed: () => _seekBy(_seekStep),
+        icon: const Icon(Icons.forward_10_rounded),
+        color: Colors.white,
+        tooltip: '快进 10 秒',
+      ),
+    ];
+  }
+
+  Widget _orientationButton() {
+    return IconButton(
+      onPressed: _toggleOrientation,
+      icon: Icon(
+        _isLandscape
+            ? Icons.stay_current_portrait_rounded
+            : Icons.stay_current_landscape_rounded,
+      ),
+      color: Colors.white,
+      tooltip: _isLandscape ? '切换竖屏' : '切换横屏',
+    );
+  }
+
+  Widget _fullScreenButton() {
+    return IconButton(
+      onPressed: _toggleFullScreen,
+      icon: Icon(
+        _isFullScreen
+            ? Icons.fullscreen_exit_rounded
+            : Icons.fullscreen_rounded,
+      ),
+      color: Colors.white,
+      tooltip: _isFullScreen ? '退出全屏' : '全屏',
     );
   }
 }
