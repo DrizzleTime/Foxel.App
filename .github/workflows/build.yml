@@ -146,9 +146,16 @@ jobs:
       - name: Build iOS
         run: flutter build ios --release --no-codesign
 
-      - name: Upload iOS bundle
+      - name: Package unsigned IPA
+        run: |
+          mkdir -p build/ios/ipa/Payload
+          ditto build/ios/iphoneos/Runner.app build/ios/ipa/Payload/Runner.app
+          cd build/ios/ipa
+          zip -r foxel-ios-unsigned.ipa Payload
+
+      - name: Upload unsigned IPA
         uses: actions/upload-artifact@v7
         with:
-          name: foxel-ios-bundle
-          path: build/ios/iphoneos/Runner.app
+          name: foxel-ios-unsigned-ipa
+          path: build/ios/ipa/foxel-ios-unsigned.ipa
           if-no-files-found: error
