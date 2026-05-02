@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 
 import 'package:foxel/core/api/foxel_api_exception.dart';
+import 'package:foxel/core/models/adapter_usage.dart';
 import 'package:foxel/core/models/file_entry.dart';
 import 'package:foxel/core/models/session.dart';
 import 'package:foxel/core/models/user_profile.dart';
@@ -96,6 +97,14 @@ class FoxelApi {
       'sort_order': 'asc',
     });
     return DirectoryListing.fromJson(data);
+  }
+
+  Future<List<AdapterUsage>> adapterUsages() async {
+    final data = await _getJsonList('/adapters/usage');
+    return data
+        .whereType<Map<String, dynamic>>()
+        .map(AdapterUsage.fromJson)
+        .toList();
   }
 
   Future<Uint8List> readFile(String path) async {
@@ -241,6 +250,15 @@ class FoxelApi {
     final response = await _client.get(_uri(path, query), headers: _headers());
     final data = _decodeWrapped(response);
     if (data is Map<String, dynamic>) {
+      return data;
+    }
+    throw const FoxelApiException('后端响应格式不正确');
+  }
+
+  Future<List<dynamic>> _getJsonList(String path) async {
+    final response = await _client.get(_uri(path), headers: _headers());
+    final data = _decodeWrapped(response);
+    if (data is List<dynamic>) {
       return data;
     }
     throw const FoxelApiException('后端响应格式不正确');

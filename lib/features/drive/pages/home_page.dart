@@ -2,6 +2,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import 'package:foxel/core/api/foxel_api.dart';
+import 'package:foxel/core/models/adapter_usage.dart';
 import 'package:foxel/core/models/file_entry.dart';
 import 'package:foxel/features/drive/controllers/transfer_task_controller.dart';
 
@@ -30,18 +31,26 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  late Future<DirectoryListing> _rootFuture;
+  late Future<_HomeData> _homeFuture;
 
   @override
   void initState() {
     super.initState();
-    _rootFuture = widget.api.listDirectory('/');
+    _homeFuture = _loadHomeData();
   }
 
   void _refresh() {
     setState(() {
-      _rootFuture = widget.api.listDirectory('/');
+      _homeFuture = _loadHomeData();
     });
+  }
+
+  Future<_HomeData> _loadHomeData() async {
+    final listingFuture = widget.api.listDirectory('/');
+    final usagesFuture = widget.api.adapterUsages();
+    final listing = await listingFuture;
+    final usages = await usagesFuture;
+    return _HomeData(listing: listing, storage: _storageFor(usages));
   }
 
   void _showMessage(String message) {
@@ -118,27 +127,25 @@ class _HomePageState extends State<HomePage> {
     widget.onOpenTasks();
   }
 
-  _HomeSummary _summaryFor(List<FileEntry> entries) {
-    var folderCount = 0;
-    var fileCount = 0;
-    var totalSize = 0;
-    var latestMtime = 0;
-    for (final entry in entries) {
-      if (entry.isDir) {
-        folderCount += 1;
-      } else {
-        fileCount += 1;
-        totalSize += entry.size;
+  _StorageSummary _storageFor(List<AdapterUsage> usages) {
+    var usedBytes = 0;
+    var totalBytes = 0;
+    var freeBytes = 0;
+    var supportedCount = 0;
+    for (final usage in usages) {
+      if (!usage.supported) {
+        continue;
       }
-      if (entry.mtime > latestMtime) {
-        latestMtime = entry.mtime;
-      }
+      usedBytes += usage.usedBytes;
+      totalBytes += usage.totalBytes;
+      freeBytes += usage.freeBytes;
+      supportedCount += 1;
     }
-    return _HomeSummary(
-      folderCount: folderCount,
-      fileCount: fileCount,
-      totalSize: totalSize,
-      latestMtime: latestMtime,
+    return _StorageSummary(
+      usedBytes: usedBytes,
+      totalBytes: totalBytes,
+      freeBytes: freeBytes,
+      supportedCount: supportedCount,
     );
   }
 
@@ -182,8 +189,8 @@ class _HomePageState extends State<HomePage> {
         bottom: false,
         child: RefreshIndicator(
           onRefresh: () async => _refresh(),
-          child: FutureBuilder<DirectoryListing>(
-            future: _rootFuture,
+          child: FutureBuilder<_HomeData>(
+            future: _homeFuture,
             builder: (context, snapshot) {
               if (snapshot.connectionState != ConnectionState.done) {
                 return const _HomeLoadingView();
@@ -195,8 +202,9 @@ class _HomePageState extends State<HomePage> {
                 );
               }
 
-              final entries = snapshot.data?.entries ?? const <FileEntry>[];
-              final summary = _summaryFor(entries);
+              final data = snapshot.data;
+              final entries = data?.listing.entries ?? const <FileEntry>[];
+              final storage = data?.storage ?? _StorageSummary.empty;
               final recent = [...entries]
                 ..sort((a, b) => b.mtime.compareTo(a.mtime));
               final topRecent = recent.take(6).toList();
@@ -213,9 +221,10 @@ class _HomePageState extends State<HomePage> {
                   ),
                   const SizedBox(height: 24),
                   _HeroPanel(
-                    totalText: '${summary.folderCount + summary.fileCount} 项',
-                    usedText: _formatSize(summary.totalSize),
-                    updatedText: _formatMtime(summary.latestMtime),
+                    totalText:
+                        '可用 ${_formatSize(storage.freeBytes)} / 总计 ${_formatSize(storage.totalBytes)}',
+                    usedText: _formatSize(storage.usedBytes),
+                    percentText: storage.percentText,
                     onUpload: _uploadFile,
                     onCreateFolder: _createFolder,
                     onOpenFiles: widget.onOpenFiles,
@@ -261,18 +270,43 @@ class _HomePageState extends State<HomePage> {
   }
 }
 
-class _HomeSummary {
-  const _HomeSummary({
-    required this.folderCount,
-    required this.fileCount,
-    required this.totalSize,
-    required this.latestMtime,
+class _HomeData {
+  const _HomeData({required this.listing, required this.storage});
+
+  final DirectoryListing listing;
+  final _StorageSummary storage;
+}
+
+class _StorageSummary {
+  const _StorageSummary({
+    required this.usedBytes,
+    required this.totalBytes,
+    required this.freeBytes,
+    required this.supportedCount,
   });
 
-  final int folderCount;
-  final int fileCount;
-  final int totalSize;
-  final int latestMtime;
+  static const empty = _StorageSummary(
+    usedBytes: 0,
+    totalBytes: 0,
+    freeBytes: 0,
+    supportedCount: 0,
+  );
+
+  final int usedBytes;
+  final int totalBytes;
+  final int freeBytes;
+  final int supportedCount;
+
+  String get percentText {
+    if (totalBytes <= 0) {
+      return '0%';
+    }
+    final percent = usedBytes / totalBytes * 100;
+    if (percent < 10) {
+      return '${percent.toStringAsFixed(1)}%';
+    }
+    return '${percent.toStringAsFixed(0)}%';
+  }
 }
 
 class _HomeHeader extends StatelessWidget {
@@ -414,7 +448,7 @@ class _HeroPanel extends StatelessWidget {
   const _HeroPanel({
     required this.totalText,
     required this.usedText,
-    required this.updatedText,
+    required this.percentText,
     required this.onUpload,
     required this.onCreateFolder,
     required this.onOpenFiles,
@@ -422,7 +456,7 @@ class _HeroPanel extends StatelessWidget {
 
   final String totalText;
   final String usedText;
-  final String updatedText;
+  final String percentText;
   final VoidCallback onUpload;
   final VoidCallback onCreateFolder;
   final VoidCallback onOpenFiles;
@@ -498,7 +532,7 @@ class _HeroPanel extends StatelessWidget {
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          '$totalText · $updatedText',
+                          totalText,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: theme.textTheme.bodyMedium?.copyWith(
@@ -510,7 +544,7 @@ class _HeroPanel extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(width: 14),
-                  _UsageBadge(value: totalText),
+                  _UsageBadge(value: percentText),
                 ],
               ),
               const SizedBox(height: 20),
