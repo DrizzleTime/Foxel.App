@@ -33,6 +33,7 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
   Timer? _hideControlsTimer;
   bool _showControls = true;
   bool _isFullScreen = false;
+  bool _isLandscape = false;
   bool _isDraggingProgress = false;
   double _dragProgress = 0;
   double _volume = 1;
@@ -59,7 +60,7 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
     _hideControlsTimer?.cancel();
     _controller.removeListener(_handleControllerChanged);
     _controller.dispose();
-    _restoreSystemUi();
+    _restoreSystemSettings();
     super.dispose();
   }
 
@@ -157,8 +158,36 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
     _scheduleControlsHide();
   }
 
+  Future<void> _toggleOrientation() async {
+    final next = !_isLandscape;
+    setState(() {
+      _isLandscape = next;
+      _isFullScreen = next;
+      _showControls = true;
+    });
+
+    if (next) {
+      await SystemChrome.setPreferredOrientations([
+        DeviceOrientation.landscapeLeft,
+        DeviceOrientation.landscapeRight,
+      ]);
+      await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    } else {
+      await SystemChrome.setPreferredOrientations([
+        DeviceOrientation.portraitUp,
+      ]);
+      await _restoreSystemUi();
+    }
+    _scheduleControlsHide();
+  }
+
   Future<void> _restoreSystemUi() {
     return SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+  }
+
+  Future<void> _restoreSystemSettings() async {
+    await SystemChrome.setPreferredOrientations(DeviceOrientation.values);
+    await _restoreSystemUi();
   }
 
   String _formatDuration(Duration duration) {
@@ -178,9 +207,7 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
   Widget build(BuildContext context) {
     return PopScope(
       onPopInvokedWithResult: (_, _) {
-        if (_isFullScreen) {
-          _restoreSystemUi();
-        }
+        _restoreSystemSettings();
       },
       child: Scaffold(
         backgroundColor: Colors.black,
@@ -388,6 +415,17 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
                   value: _volume,
                   onChanged: _setVolume,
                   onMute: _toggleMute,
+                ),
+                const SizedBox(width: 4),
+                IconButton(
+                  onPressed: _toggleOrientation,
+                  icon: Icon(
+                    _isLandscape
+                        ? Icons.stay_current_portrait_rounded
+                        : Icons.stay_current_landscape_rounded,
+                  ),
+                  color: Colors.white,
+                  tooltip: _isLandscape ? '切换竖屏' : '切换横屏',
                 ),
                 const SizedBox(width: 4),
                 IconButton(
