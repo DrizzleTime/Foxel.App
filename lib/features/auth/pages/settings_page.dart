@@ -11,6 +11,8 @@ import 'package:foxel/core/models/session.dart';
 import 'package:foxel/features/auth/models/qr_login_payload.dart';
 import 'package:foxel/features/auth/services/qr_code_decoder.dart';
 
+enum _LoginMode { manual, qr }
+
 class SettingsPage extends StatefulWidget {
   const SettingsPage({
     super.key,
@@ -28,9 +30,12 @@ class SettingsPage extends StatefulWidget {
 class _SettingsPageState extends State<SettingsPage> {
   final _decoder = const QrCodeDecoder();
   final _baseUrlController = TextEditingController();
+  final _usernameController = TextEditingController();
+  final _passwordController = TextEditingController();
 
   CameraController? _cameraController;
   Timer? _scanTimer;
+  _LoginMode _loginMode = _LoginMode.manual;
   bool _cameraBootstrapped = false;
   bool _cameraBusy = false;
   bool _usingImageStream = false;
@@ -46,12 +51,8 @@ class _SettingsPageState extends State<SettingsPage> {
   void initState() {
     super.initState();
     _baseUrlController.text = widget.initialBaseUrl;
-    if (_cameraScanSupported) {
-      _bootstrapCamera();
-    } else {
-      _loadingCamera = false;
-      _statusText = '当前平台仅支持从图片识别二维码登录';
-    }
+    _loadingCamera = false;
+    _statusText = '请选择连接方式';
   }
 
   bool get _cameraScanSupported {
@@ -64,6 +65,8 @@ class _SettingsPageState extends State<SettingsPage> {
   void dispose() {
     _scanTimer?.cancel();
     _baseUrlController.dispose();
+    _usernameController.dispose();
+    _passwordController.dispose();
     unawaited(_shutdownCamera());
     super.dispose();
   }
@@ -71,6 +74,7 @@ class _SettingsPageState extends State<SettingsPage> {
   Future<void> _shutdownCamera() async {
     await _stopScanning();
     await _disposeCamera();
+    _cameraBootstrapped = false;
   }
 
   Future<void> _bootstrapCamera() async {
@@ -82,6 +86,7 @@ class _SettingsPageState extends State<SettingsPage> {
     try {
       final cameras = await availableCameras();
       if (cameras.isEmpty) {
+        _cameraBootstrapped = false;
         if (!mounted) {
           return;
         }
@@ -108,6 +113,12 @@ class _SettingsPageState extends State<SettingsPage> {
         return;
       }
 
+      if (_loginMode != _LoginMode.qr) {
+        await controller.dispose();
+        _cameraBootstrapped = false;
+        return;
+      }
+
       setState(() {
         _cameraController = controller;
         _loadingCamera = false;
@@ -115,6 +126,7 @@ class _SettingsPageState extends State<SettingsPage> {
       });
       await _startScanning();
     } catch (error) {
+      _cameraBootstrapped = false;
       if (!mounted) {
         return;
       }
@@ -272,6 +284,9 @@ class _SettingsPageState extends State<SettingsPage> {
     if (_loggingIn || _importing) {
       return;
     }
+    if (_loginMode != _LoginMode.qr) {
+      return;
+    }
     if (!_cameraScanSupported) {
       setState(() {
         _errorText = null;
@@ -288,6 +303,48 @@ class _SettingsPageState extends State<SettingsPage> {
       _statusText = '重新开始扫描';
     });
     await _startScanning();
+  }
+
+  Future<void> _setLoginMode(_LoginMode mode) async {
+    if (_loginMode == mode) {
+      return;
+    }
+
+    if (mode == _LoginMode.manual) {
+      setState(() {
+        _loginMode = mode;
+        _errorText = null;
+        _statusText = '请选择连接方式';
+      });
+      await _shutdownCamera();
+      if (mounted) {
+        setState(() {
+          _loadingCamera = false;
+        });
+      }
+      return;
+    }
+
+    setState(() {
+      _loginMode = mode;
+      _errorText = null;
+      _statusText = null;
+    });
+
+    if (!_cameraScanSupported) {
+      setState(() {
+        _loadingCamera = false;
+        _statusText = '当前平台仅支持从图片识别二维码登录';
+      });
+      return;
+    }
+
+    if (_cameraController != null) {
+      await _startScanning();
+      return;
+    }
+
+    await _bootstrapCamera();
   }
 
   Future<void> _pickImageAndDecode() async {
@@ -324,6 +381,38 @@ class _SettingsPageState extends State<SettingsPage> {
     } finally {
       if (mounted) {
         setState(() => _importing = false);
+      }
+    }
+  }
+
+  Future<void> _loginManually() async {
+    if (_loggingIn) {
+      return;
+    }
+    setState(() {
+      _loggingIn = true;
+      _errorText = null;
+      _statusText = '正在登录';
+    });
+    try {
+      final api = FoxelApi(baseUrl: _baseUrlController.text);
+      final session = await api.login(
+        username: _usernameController.text,
+        password: _passwordController.text,
+      );
+      api.close();
+      widget.onLoggedIn(session);
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _errorText = error.toString();
+        _statusText = null;
+      });
+    } finally {
+      if (mounted) {
+        setState(() => _loggingIn = false);
       }
     }
   }
@@ -383,90 +472,143 @@ class _SettingsPageState extends State<SettingsPage> {
           children: [
             Text('连接后端', style: Theme.of(context).textTheme.headlineSmall),
             const SizedBox(height: 16),
+            SegmentedButton<_LoginMode>(
+              segments: const [
+                ButtonSegment(
+                  value: _LoginMode.manual,
+                  icon: Icon(Icons.person_outline_rounded),
+                  label: Text('手动登录'),
+                ),
+                ButtonSegment(
+                  value: _LoginMode.qr,
+                  icon: Icon(Icons.qr_code_scanner_rounded),
+                  label: Text('二维码登录'),
+                ),
+              ],
+              selected: {_loginMode},
+              onSelectionChanged: (selected) {
+                unawaited(_setLoginMode(selected.first));
+              },
+            ),
+            const SizedBox(height: 16),
             TextField(
               controller: _baseUrlController,
-              readOnly: true,
+              readOnly: _loginMode == _LoginMode.qr,
               decoration: const InputDecoration(
                 labelText: '后端地址',
                 prefixIcon: Icon(Icons.dns_rounded),
                 border: OutlineInputBorder(),
               ),
             ),
-            const SizedBox(height: 14),
-            FilledButton.icon(
-              onPressed: _importing ? null : _pickImageAndDecode,
-              icon: _importing
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.image_search_rounded),
-              label: Text(_importing ? '识别中' : '从图片识别'),
-            ),
-            const SizedBox(height: 12),
-            OutlinedButton.icon(
-              onPressed: (!cameraScanSupported || _cameraBusy || _loggingIn)
-                  ? null
-                  : _restartScanning,
-              icon: const Icon(Icons.qr_code_scanner_rounded),
-              label: Text(_scanPaused ? '重新开始扫描' : '继续扫描'),
-            ),
-            const SizedBox(height: 16),
-            Container(
-              height: 280,
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: const Color(0xFFE1E7EF)),
+            if (_loginMode == _LoginMode.manual) ...[
+              const SizedBox(height: 12),
+              TextField(
+                controller: _usernameController,
+                decoration: const InputDecoration(
+                  labelText: '账号',
+                  prefixIcon: Icon(Icons.person_rounded),
+                  border: OutlineInputBorder(),
+                ),
               ),
-              child: hasPreview
-                  ? ClipRRect(
-                      borderRadius: BorderRadius.circular(12),
-                      child: Stack(
-                        fit: StackFit.expand,
-                        children: [
-                          Center(
-                            child: AspectRatio(
-                              aspectRatio: controller.value.aspectRatio,
-                              child: CameraPreview(controller),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _passwordController,
+                obscureText: true,
+                decoration: const InputDecoration(
+                  labelText: '密码',
+                  prefixIcon: Icon(Icons.lock_rounded),
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 14),
+              FilledButton.icon(
+                onPressed: _loggingIn ? null : _loginManually,
+                icon: _loggingIn
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.login_rounded),
+                label: Text(_loggingIn ? '登录中' : '登录'),
+              ),
+            ] else ...[
+              const SizedBox(height: 14),
+              FilledButton.icon(
+                onPressed: _importing ? null : _pickImageAndDecode,
+                icon: _importing
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.image_search_rounded),
+                label: Text(_importing ? '识别中' : '从图片识别'),
+              ),
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                onPressed: (!cameraScanSupported || _cameraBusy || _loggingIn)
+                    ? null
+                    : _restartScanning,
+                icon: const Icon(Icons.qr_code_scanner_rounded),
+                label: Text(_scanPaused ? '重新开始扫描' : '继续扫描'),
+              ),
+              const SizedBox(height: 16),
+              Container(
+                height: 280,
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: const Color(0xFFE1E7EF)),
+                ),
+                child: hasPreview
+                    ? ClipRRect(
+                        borderRadius: BorderRadius.circular(12),
+                        child: Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            Center(
+                              child: AspectRatio(
+                                aspectRatio: controller.value.aspectRatio,
+                                child: CameraPreview(controller),
+                              ),
                             ),
-                          ),
-                          Positioned.fill(
-                            child: IgnorePointer(
-                              child: Center(
-                                child: Container(
-                                  width: 220,
-                                  height: 220,
-                                  decoration: BoxDecoration(
-                                    border: Border.all(
-                                      color: const Color(0xFF276EF1),
-                                      width: 2,
+                            Positioned.fill(
+                              child: IgnorePointer(
+                                child: Center(
+                                  child: Container(
+                                    width: 220,
+                                    height: 220,
+                                    decoration: BoxDecoration(
+                                      border: Border.all(
+                                        color: const Color(0xFF276EF1),
+                                        width: 2,
+                                      ),
+                                      borderRadius: BorderRadius.circular(12),
                                     ),
-                                    borderRadius: BorderRadius.circular(12),
                                   ),
                                 ),
                               ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
+                      )
+                    : Center(
+                        child: _loadingCamera
+                            ? const CircularProgressIndicator()
+                            : cameraScanSupported
+                            ? const Icon(Icons.camera_alt_outlined, size: 36)
+                            : const Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.image_search_rounded, size: 36),
+                                  SizedBox(height: 10),
+                                  Text('请从图片识别二维码'),
+                                ],
+                              ),
                       ),
-                    )
-                  : Center(
-                      child: _loadingCamera
-                          ? const CircularProgressIndicator()
-                          : cameraScanSupported
-                          ? const Icon(Icons.camera_alt_outlined, size: 36)
-                          : const Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(Icons.image_search_rounded, size: 36),
-                                SizedBox(height: 10),
-                                Text('请从图片识别二维码'),
-                              ],
-                            ),
-                    ),
-            ),
+              ),
+            ],
             if (_statusText != null) ...[
               const SizedBox(height: 16),
               _StatusBanner(

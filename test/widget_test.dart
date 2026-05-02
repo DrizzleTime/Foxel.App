@@ -13,8 +13,11 @@ void main() {
 
     expect(find.text('Foxel 设置'), findsOneWidget);
     expect(find.text('连接后端'), findsOneWidget);
+    expect(find.text('手动登录'), findsOneWidget);
+    expect(find.text('二维码登录'), findsOneWidget);
     expect(find.text('后端地址'), findsOneWidget);
-    expect(find.text('从图片识别'), findsOneWidget);
-    expect(find.text('继续扫描'), findsOneWidget);
+    expect(find.text('账号'), findsOneWidget);
+    expect(find.text('密码'), findsOneWidget);
+    expect(find.text('登录'), findsOneWidget);
   });
 }

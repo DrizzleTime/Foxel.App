@@ -49,6 +49,7 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
     _initFuture = _controller.initialize().then((_) {
       _controller.setVolume(_volume);
       _controller.setPlaybackSpeed(_playbackSpeed);
+      _controller.play();
       _scheduleControlsHide();
     });
   }
@@ -107,7 +108,7 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
   Future<void> _seekBy(Duration offset) async {
     final value = _controller.value;
     final target = value.position + offset;
-    await _seekTo(target);
+    await _seekToAndPlay(target);
     _showControlsTemporarily();
   }
 
@@ -119,6 +120,11 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
         ? duration
         : target;
     await _controller.seekTo(clamped);
+  }
+
+  Future<void> _seekToAndPlay(Duration target) async {
+    await _seekTo(target);
+    await _controller.play();
   }
 
   Future<void> _setPlaybackSpeed(double speed) async {
@@ -334,7 +340,7 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
                           _isDraggingProgress = false;
                           _dragProgress = value;
                         });
-                        await _seekTo(duration * value);
+                        await _seekToAndPlay(duration * value);
                         _scheduleControlsHide();
                       },
                     ),
