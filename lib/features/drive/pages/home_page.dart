@@ -159,7 +159,10 @@ class _HomePageState extends State<HomePage> {
     if (size < 1024 * 1024 * 1024) {
       return '${(size / 1024 / 1024).toStringAsFixed(1)} MB';
     }
-    return '${(size / 1024 / 1024 / 1024).toStringAsFixed(1)} GB';
+    if (size < 1024 * 1024 * 1024 * 1024) {
+      return '${(size / 1024 / 1024 / 1024).toStringAsFixed(1)} GB';
+    }
+    return '${(size / 1024 / 1024 / 1024 / 1024).toStringAsFixed(1)} TB';
   }
 
   String _formatMtime(int mtime) {
