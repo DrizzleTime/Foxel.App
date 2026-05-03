@@ -55,14 +55,17 @@ jobs:
             printf 'keyPassword=%s\n' "$ANDROID_KEY_PASSWORD"
           } > android/key.properties
 
-      - name: Build APK
-        run: flutter build apk --release
+      - name: Build ABI split APKs
+        run: bash scripts/build_android_split_apk.sh
 
-      - name: Upload APK
+      - name: Upload ABI split APKs
         uses: actions/upload-artifact@v7
         with:
-          name: foxel-android-apk
-          path: build/app/outputs/flutter-apk/app-release.apk
+          name: foxel-android-split-apks
+          path: |
+            build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
+            build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+            build/app/outputs/flutter-apk/app-x86_64-release.apk
           if-no-files-found: error
 
   build-linux:
