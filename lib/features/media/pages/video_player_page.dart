@@ -37,6 +37,7 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
   VideoPlayerController? _controller;
   late final Future<void> _initFuture;
   late final VideoCacheProxy _cacheProxy;
+  late final ImageProvider _posterProvider;
   final _playbackStore = VideoPlaybackStore();
 
   Timer? _hideControlsTimer;
@@ -47,6 +48,8 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
   bool _isFullScreen = false;
   bool _isLandscape = false;
   bool _isDraggingProgress = false;
+  bool _showVideoSurface = false;
+  bool _didPrecachePoster = false;
   double _dragProgress = 0;
   double _volume = 1;
   double _playbackSpeed = 1;
@@ -61,7 +64,25 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
       size: widget.size,
       mtime: widget.mtime,
     );
+    _posterProvider = NetworkImage(
+      widget.api.thumbnailUri(widget.path, width: 960, height: 960).toString(),
+      headers: widget.api.authHeaders(),
+    );
     _initFuture = _initializePlayer();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_didPrecachePoster) {
+      return;
+    }
+    _didPrecachePoster = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        unawaited(precacheImage(_posterProvider, context));
+      }
+    });
   }
 
   @override
@@ -123,6 +144,12 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
     final controller = _controller;
     if (controller != null) {
       final value = controller.value;
+      final shouldShowVideoSurface =
+          value.isInitialized &&
+          (value.position > Duration.zero || value.isCompleted);
+      if (shouldShowVideoSurface && !_showVideoSurface) {
+        _showVideoSurface = true;
+      }
       final signature = [
         value.isInitialized,
         value.isPlaying,
@@ -362,7 +389,7 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
           future: _initFuture,
           builder: (context, snapshot) {
             if (snapshot.connectionState != ConnectionState.done) {
-              return const Center(child: CircularProgressIndicator());
+              return _buildLoadingSurface();
             }
             if (snapshot.hasError) {
               return _ErrorView(error: snapshot.error.toString());
@@ -377,26 +404,34 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
   Widget _buildPlayer() {
     final controller = _controller;
     if (controller == null) {
-      return const Center(child: CircularProgressIndicator());
+      return _buildLoadingSurface();
     }
     final value = controller.value;
     final duration = value.duration;
     final position = _isDraggingProgress
         ? duration * _dragProgress
         : value.position;
+    final showLoadingSurface = !_showVideoSurface;
 
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: _toggleControls,
       child: Stack(
         children: [
+          Positioned.fill(
+            child: _buildPosterBackground(visible: showLoadingSurface),
+          ),
           Center(
             child: AspectRatio(
               aspectRatio: value.aspectRatio == 0 ? 16 / 9 : value.aspectRatio,
               child: VideoPlayer(controller),
             ),
           ),
-          if (_showControls)
+          if (showLoadingSurface)
+            const Positioned.fill(
+              child: Center(child: CircularProgressIndicator()),
+            ),
+          if (_showControls && !showLoadingSurface)
             Positioned.fill(
               child: DecoratedBox(
                 decoration: BoxDecoration(
@@ -413,7 +448,7 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
               ),
             ),
           if (_showControls) _buildTopBar(),
-          if (_showControls)
+          if (_showControls && !showLoadingSurface)
             Center(
               child: IconButton.filled(
                 onPressed: _togglePlay,
@@ -425,7 +460,7 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
                 ),
               ),
             ),
-          if (_showControls)
+          if (_showControls && !showLoadingSurface)
             Positioned(
               left: 0,
               right: 0,
@@ -437,6 +472,31 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
               ),
             ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildLoadingSurface() {
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        _buildPosterBackground(visible: true),
+        const Center(child: CircularProgressIndicator()),
+        _buildTopBar(),
+      ],
+    );
+  }
+
+  Widget _buildPosterBackground({required bool visible}) {
+    return IgnorePointer(
+      child: AnimatedOpacity(
+        opacity: visible ? 1 : 0,
+        duration: const Duration(milliseconds: 180),
+        child: Image(
+          image: _posterProvider,
+          fit: BoxFit.cover,
+          errorBuilder: (_, _, _) => const ColoredBox(color: Colors.black),
+        ),
       ),
     );
   }
@@ -505,27 +565,30 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
                   style: const TextStyle(color: Colors.white, fontSize: 12),
                 ),
                 Expanded(
-                  child: _VideoSeekBar(
-                    progress: progress,
-                    bufferedProgress: bufferedProgress,
-                    onChangeStart: (value) {
-                      _hideControlsTimer?.cancel();
-                      setState(() {
-                        _isDraggingProgress = true;
-                        _dragProgress = value;
-                      });
-                    },
-                    onChanged: (value) {
-                      setState(() => _dragProgress = value);
-                    },
-                    onChangeEnd: (value) async {
-                      setState(() {
-                        _isDraggingProgress = false;
-                        _dragProgress = value;
-                      });
-                      await _seekToAndPlay(duration * value);
-                      _scheduleControlsHide();
-                    },
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: _VideoSeekBar(
+                      progress: progress,
+                      bufferedProgress: bufferedProgress,
+                      onChangeStart: (value) {
+                        _hideControlsTimer?.cancel();
+                        setState(() {
+                          _isDraggingProgress = true;
+                          _dragProgress = value;
+                        });
+                      },
+                      onChanged: (value) {
+                        setState(() => _dragProgress = value);
+                      },
+                      onChangeEnd: (value) async {
+                        setState(() {
+                          _isDraggingProgress = false;
+                          _dragProgress = value;
+                        });
+                        await _seekToAndPlay(duration * value);
+                        _scheduleControlsHide();
+                      },
+                    ),
                   ),
                 ),
                 Text(

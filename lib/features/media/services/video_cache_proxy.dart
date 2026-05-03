@@ -16,6 +16,7 @@ class VideoCacheProxy {
   });
 
   static const _chunkSize = 4 * 1024 * 1024;
+  static const _prefetchCount = 6;
 
   final FoxelApi api;
   final String path;
@@ -24,6 +25,8 @@ class VideoCacheProxy {
 
   HttpServer? _server;
   late final Directory _cacheDir;
+  final _cachedChunkIndices = <int>{};
+  final _inflightChunks = <int, Future<void>>{};
   final _cachedChunksController =
       StreamController<List<CachedVideoRange>>.broadcast();
 
@@ -38,6 +41,7 @@ class VideoCacheProxy {
       await _cacheDir.create(recursive: true);
     }
     _log('cache dir=${_cacheDir.path}');
+    _cachedChunkIndices.addAll(await _loadCachedChunkIndices());
 
     _server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     _server!.listen(_handleRequest);
@@ -58,13 +62,21 @@ class VideoCacheProxy {
     if (_cachedChunksController.isClosed) {
       return;
     }
-    _cachedChunksController.add(await cachedRanges());
+    _cachedChunksController.add(_cachedRangesFromIndices());
   }
 
   Future<List<CachedVideoRange>> cachedRanges() async {
-    final ranges = <CachedVideoRange>[];
+    final indices = await _loadCachedChunkIndices();
+    _cachedChunkIndices
+      ..clear()
+      ..addAll(indices);
+    return _cachedRangesFromIndices();
+  }
+
+  Future<Set<int>> _loadCachedChunkIndices() async {
+    final indices = <int>{};
     if (!await _cacheDir.exists()) {
-      return ranges;
+      return indices;
     }
 
     await for (final entity in _cacheDir.list()) {
@@ -80,12 +92,10 @@ class VideoCacheProxy {
       final end = _chunkEnd(index);
       final expectedLength = end - start + 1;
       if (await entity.length() == expectedLength) {
-        ranges.add(CachedVideoRange(start: start, end: end));
+        indices.add(index);
       }
     }
-
-    ranges.sort((a, b) => a.start.compareTo(b.start));
-    return ranges;
+    return indices;
   }
 
   Future<void> _handleRequest(HttpRequest request) async {
@@ -121,10 +131,7 @@ class VideoCacheProxy {
         ? HttpStatus.ok
         : HttpStatus.partialContent;
     response.headers.set(HttpHeaders.acceptRangesHeader, 'bytes');
-    response.headers.set(
-      HttpHeaders.contentTypeHeader,
-      'application/octet-stream',
-    );
+    response.headers.set(HttpHeaders.contentTypeHeader, 'video/mp4');
     response.headers.set(HttpHeaders.contentLengthHeader, length.toString());
     if (range != null) {
       response.headers.set(
@@ -139,7 +146,7 @@ class VideoCacheProxy {
 
     if (request.method == 'HEAD') {
       _log('head complete start=$start end=$end');
-      await response.close();
+      await _closeResponseSafely(response);
       return;
     }
 
@@ -147,11 +154,15 @@ class VideoCacheProxy {
       await _writeRange(response, start, end);
       _log('request complete start=$start end=$end');
     } catch (error, stackTrace) {
+      if (_isExpectedDisconnect(error)) {
+        _log('request aborted start=$start end=$end error=$error');
+        return;
+      }
       _log('request failed start=$start end=$end error=$error');
       _log('$stackTrace');
       rethrow;
     } finally {
-      await response.close();
+      await _closeResponseSafely(response);
     }
   }
 
@@ -169,70 +180,128 @@ class VideoCacheProxy {
         'chunkEnd=$chunkEnd read=$absoluteReadStart-$absoluteReadEnd',
       );
 
-      final file = _chunkFile(chunkIndex);
-      final expectedLength = chunkEnd - chunkStart + 1;
-      final isCached =
-          await file.exists() && await file.length() == expectedLength;
-      if (isCached) {
+      if (await _isChunkCached(chunkIndex)) {
         final readStart = absoluteReadStart - chunkStart;
         final readEnd = absoluteReadEnd - chunkStart;
         _log('cache hit index=$chunkIndex read=$readStart-$readEnd');
-        await response.addStream(file.openRead(readStart, readEnd + 1));
+        await _writeCachedChunk(
+          response,
+          index: chunkIndex,
+          start: absoluteReadStart,
+          end: absoluteReadEnd,
+        );
       } else if (absoluteReadStart == chunkStart &&
           absoluteReadEnd == chunkEnd) {
-        await _streamAndCacheChunk(response, chunkIndex);
+        await _cacheChunk(chunkIndex, output: response);
       } else {
         await _streamBackendRange(response, absoluteReadStart, absoluteReadEnd);
+      }
+      if (absoluteReadEnd == chunkEnd) {
+        _schedulePrefetch(chunkIndex + 1);
       }
       offset = absoluteReadEnd + 1;
     }
   }
 
-  Future<void> _streamAndCacheChunk(HttpResponse output, int index) async {
+  void _schedulePrefetch(int index) {
+    for (var i = 0; i < _prefetchCount; i++) {
+      _prefetchChunk(index + i);
+    }
+  }
+
+  void _prefetchChunk(int index) {
+    if (index < 0 || index * _chunkSize >= size) {
+      return;
+    }
+    if (_cachedChunkIndices.contains(index) ||
+        _inflightChunks.containsKey(index)) {
+      return;
+    }
+    unawaited(_cacheChunk(index));
+  }
+
+  Future<void> _cacheChunk(int index, {HttpResponse? output}) async {
     final start = index * _chunkSize;
     final end = _chunkEnd(index);
     final file = _chunkFile(index);
     final expectedLength = end - start + 1;
-    if (await file.exists() && await file.length() == expectedLength) {
-      _log('cache completed before stream index=$index');
-      await output.addStream(file.openRead());
+    if (_cachedChunkIndices.contains(index)) {
+      if (output != null) {
+        await _writeCachedChunk(output, index: index, start: start, end: end);
+      }
       return;
     }
 
-    final tempFile = File(
-      '${file.path}.${DateTime.now().microsecondsSinceEpoch}.part',
-    );
-    _log('stream miss begin index=$index range=$start-$end');
-    final backend = await _openBackendRange(start, end, 'chunk index=$index');
-    final sink = tempFile.openWrite();
-    var written = 0;
-    try {
-      await for (final bytes in backend.stream) {
-        written += bytes.length;
-        output.add(bytes);
-        sink.add(bytes);
-        await output.flush();
+    final inflight = _inflightChunks[index];
+    if (inflight != null) {
+      _log('wait inflight chunk index=$index');
+      await inflight;
+      if (output != null) {
+        await _writeCachedChunk(output, index: index, start: start, end: end);
       }
-    } finally {
-      await sink.close();
+      return;
     }
 
-    if (written == expectedLength) {
-      if (await file.exists()) {
-        await tempFile.delete();
-      } else {
-        await tempFile.rename(file.path);
-        unawaited(notifyCachedRanges());
-      }
-      _log('stream miss complete index=$index length=$written cached=true');
-    } else {
-      if (await tempFile.exists()) {
-        await tempFile.delete();
-      }
-      _log(
-        'stream miss incomplete index=$index length=$written '
-        'expected=$expectedLength',
+    final download = Future<void>(() async {
+      final tempFile = File(
+        '${file.path}.${DateTime.now().microsecondsSinceEpoch}.part',
       );
+      final label = output == null ? 'prefetch' : 'chunk';
+      _log('$label begin index=$index range=$start-$end');
+      final backend = await _openBackendRange(start, end, 'chunk index=$index');
+      final sink = tempFile.openWrite();
+      var written = 0;
+      var clientDisconnected = false;
+      try {
+        await for (final bytes in backend.stream) {
+          written += bytes.length;
+          if (output != null && !clientDisconnected) {
+            try {
+              output.add(bytes);
+            } catch (error) {
+              if (_isExpectedDisconnect(error)) {
+                clientDisconnected = true;
+                _log('client disconnected index=$index');
+              } else {
+                rethrow;
+              }
+            }
+          }
+          sink.add(bytes);
+        }
+      } catch (error) {
+        if (!_isExpectedDisconnect(error)) {
+          rethrow;
+        }
+      } finally {
+        await sink.close();
+      }
+
+      if (written == expectedLength) {
+        if (await file.exists()) {
+          await tempFile.delete();
+        } else {
+          await tempFile.rename(file.path);
+          _cachedChunkIndices.add(index);
+          unawaited(notifyCachedRanges());
+        }
+        _log('$label complete index=$index length=$written cached=true');
+      } else {
+        if (await tempFile.exists()) {
+          await tempFile.delete();
+        }
+        _log(
+          '$label incomplete index=$index length=$written expected=$expectedLength',
+        );
+      }
+    });
+    _inflightChunks[index] = download;
+    try {
+      await download;
+    } finally {
+      if (identical(_inflightChunks[index], download)) {
+        _inflightChunks.remove(index);
+      }
     }
   }
 
@@ -241,13 +310,33 @@ class VideoCacheProxy {
     int start,
     int end,
   ) async {
+    final chunkIndex = start ~/ _chunkSize;
+    final inflight = _inflightChunks[chunkIndex];
+    if (inflight != null) {
+      _log('wait inflight partial index=$chunkIndex range=$start-$end');
+      await inflight;
+      await _writeCachedChunk(
+        output,
+        index: chunkIndex,
+        start: start,
+        end: end,
+      );
+      return;
+    }
+
     _log('stream partial begin range=$start-$end');
     final backend = await _openBackendRange(start, end, 'partial');
     var written = 0;
-    await for (final bytes in backend.stream) {
-      written += bytes.length;
-      output.add(bytes);
-      await output.flush();
+    try {
+      await for (final bytes in backend.stream) {
+        written += bytes.length;
+        output.add(bytes);
+      }
+    } catch (error) {
+      if (!_isExpectedDisconnect(error)) {
+        rethrow;
+      }
+      _log('stream partial aborted range=$start-$end error=$error');
     }
     _log('stream partial complete range=$start-$end length=$written');
   }
@@ -274,6 +363,89 @@ class VideoCacheProxy {
 
   File _chunkFile(int index) {
     return File('${_cacheDir.path}/$index.bin');
+  }
+
+  Future<void> _closeResponseSafely(HttpResponse response) async {
+    try {
+      await response.close();
+    } catch (error) {
+      if (!_isExpectedDisconnect(error)) {
+        rethrow;
+      }
+    }
+  }
+
+  Future<bool> _isChunkCached(int index) async {
+    return _cachedChunkIndices.contains(index);
+  }
+
+  List<CachedVideoRange> _cachedRangesFromIndices() {
+    if (_cachedChunkIndices.isEmpty) {
+      return const [];
+    }
+    final sorted = _cachedChunkIndices.toList()..sort();
+    final ranges = <CachedVideoRange>[];
+    var startIndex = sorted.first;
+    var previousIndex = sorted.first;
+    for (var i = 1; i < sorted.length; i++) {
+      final index = sorted[i];
+      if (index != previousIndex + 1) {
+        ranges.add(
+          CachedVideoRange(
+            start: startIndex * _chunkSize,
+            end: _chunkEnd(previousIndex),
+          ),
+        );
+        startIndex = index;
+      }
+      previousIndex = index;
+    }
+    ranges.add(
+      CachedVideoRange(
+        start: startIndex * _chunkSize,
+        end: _chunkEnd(previousIndex),
+      ),
+    );
+    return ranges;
+  }
+
+  Future<void> _writeCachedChunk(
+    HttpResponse output, {
+    required int index,
+    required int start,
+    required int end,
+  }) async {
+    if (!await _isChunkCached(index)) {
+      throw StateError('缓存分片未完成：$index');
+    }
+    final chunkStart = index * _chunkSize;
+    final readStart = start - chunkStart;
+    final readEnd = end - chunkStart;
+    await output.addStream(_chunkFile(index).openRead(readStart, readEnd + 1));
+  }
+
+  bool _isExpectedDisconnect(Object error) {
+    if (error is HttpException) {
+      final message = error.message.toLowerCase();
+      return message.contains(
+            'no content even though contentlength was specified',
+          ) ||
+          message.contains('connection closed') ||
+          message.contains('broken pipe') ||
+          message.contains('connection reset');
+    }
+    if (error is http.ClientException) {
+      final message = error.message.toLowerCase();
+      return message.contains('connection closed') ||
+          message.contains('broken pipe') ||
+          message.contains('connection reset');
+    }
+    if (error is SocketException) {
+      final message = error.message.toLowerCase();
+      return message.contains('broken pipe') ||
+          message.contains('connection reset');
+    }
+    return false;
   }
 
   int _chunkEnd(int index) {
