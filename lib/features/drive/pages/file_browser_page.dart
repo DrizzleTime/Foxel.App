@@ -32,8 +32,11 @@ class FileBrowserPage extends StatefulWidget {
 
 class _FileBrowserPageState extends State<FileBrowserPage> {
   final _searchController = TextEditingController();
+  final _scrollController = ScrollController();
+  final _scrollOffsets = <String, double>{};
 
   String _path = '/';
+  String? _pendingRestorePath;
   late Future<DirectoryListing> _listingFuture;
   String _searchQuery = '';
   _SortField _sortField = _SortField.name;
@@ -48,6 +51,8 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
 
   @override
   void dispose() {
+    _saveCurrentScrollOffset();
+    _scrollController.dispose();
     _searchController.dispose();
     super.dispose();
   }
@@ -59,11 +64,31 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
   }
 
   void _openPath(String path) {
+    _saveCurrentScrollOffset();
+    final nextPath = FoxelApi.cleanPath(path);
     setState(() {
-      _path = FoxelApi.cleanPath(path);
+      _path = nextPath;
+      _pendingRestorePath = nextPath;
       _searchController.clear();
       _searchQuery = '';
       _listingFuture = widget.api.listDirectory(_path);
+    });
+  }
+
+  void _saveCurrentScrollOffset() {
+    if (_scrollController.hasClients) {
+      _scrollOffsets[_path] = _scrollController.offset;
+    }
+  }
+
+  void _restoreScrollOffset(String path) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_scrollController.hasClients) {
+        return;
+      }
+      final offset = _scrollOffsets[path] ?? 0;
+      final maxOffset = _scrollController.position.maxScrollExtent;
+      _scrollController.jumpTo(offset.clamp(0.0, maxOffset));
     });
   }
 
@@ -275,6 +300,8 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
             api: widget.api,
             path: fullPath,
             name: entry.name,
+            size: entry.size,
+            mtime: entry.mtime,
           ),
         ),
       );
@@ -545,6 +572,12 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
                   ? const <FileEntry>[]
                   : _visibleEntries(entries);
               final hasSearch = _searchQuery.trim().isNotEmpty;
+              if (!loading &&
+                  !snapshot.hasError &&
+                  _pendingRestorePath == _path) {
+                _pendingRestorePath = null;
+                _restoreScrollOffset(_path);
+              }
 
               return Column(
                 children: [
@@ -598,6 +631,7 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
                         : RefreshIndicator(
                             onRefresh: () async => _refresh(),
                             child: CustomScrollView(
+                              controller: _scrollController,
                               physics: const AlwaysScrollableScrollPhysics(),
                               slivers: [
                                 if (entries.isEmpty)
@@ -611,7 +645,8 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
                                       primaryIcon: Icons.upload_file_rounded,
                                       onPrimary: _uploadFile,
                                       secondaryLabel: '新建文件夹',
-                                      secondaryIcon: Icons.create_new_folder_rounded,
+                                      secondaryIcon:
+                                          Icons.create_new_folder_rounded,
                                       onSecondary: _createFolder,
                                     ),
                                   )
@@ -620,8 +655,7 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
                                     hasScrollBody: false,
                                     child: _EmptyView(
                                       title: '没有匹配结果',
-                                      message:
-                                          '当前目录没有包含“$_searchQuery”的文件。',
+                                      message: '当前目录没有包含“$_searchQuery”的文件。',
                                       icon: Icons.search_off_rounded,
                                       primaryLabel: '清空搜索',
                                       primaryIcon: Icons.close_rounded,
@@ -845,9 +879,7 @@ class _Toolbar extends StatelessWidget {
                 viewMode == _ViewMode.grid ? _ViewMode.list : _ViewMode.grid,
               );
             },
-            tooltip: viewMode == _ViewMode.grid
-                ? '切换到列表视图'
-                : '切换到网格视图',
+            tooltip: viewMode == _ViewMode.grid ? '切换到列表视图' : '切换到网格视图',
           );
           final createButton = _ToolbarButton(
             icon: Icons.add_rounded,
@@ -1011,7 +1043,8 @@ class _HeaderMeta extends StatelessWidget {
         ? '全部文件'
         : path.split('/').where((item) => item.isNotEmpty).last;
     final totalCount = summary.folderCount + summary.fileCount;
-    final detailText = statusText ??
+    final detailText =
+        statusText ??
         (hasSearch
             ? '匹配 $visibleCount 项 · 共 $totalCount 项'
             : summary.latestMtime > 0
@@ -1069,10 +1102,7 @@ class _HeaderMeta extends StatelessWidget {
           _BreadcrumbBar(path: path, onOpenPath: onOpenPath),
         ],
         const SizedBox(height: 8),
-        SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: actions,
-        ),
+        SingleChildScrollView(scrollDirection: Axis.horizontal, child: actions),
       ],
     );
   }
@@ -1130,9 +1160,7 @@ class _BreadcrumbChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = selected
-        ? const Color(0xFF276EF1)
-        : const Color(0xFF5D6B7A);
+    final color = selected ? const Color(0xFF276EF1) : const Color(0xFF5D6B7A);
     return Padding(
       padding: const EdgeInsets.only(right: 2),
       child: InkWell(

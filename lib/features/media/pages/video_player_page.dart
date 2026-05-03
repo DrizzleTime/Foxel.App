@@ -5,6 +5,8 @@ import 'package:flutter/services.dart';
 import 'package:video_player/video_player.dart';
 
 import 'package:foxel/core/api/foxel_api.dart';
+import 'package:foxel/features/media/services/video_cache_proxy.dart';
+import 'package:foxel/features/media/services/video_playback_store.dart';
 
 class VideoPlayerPage extends StatefulWidget {
   const VideoPlayerPage({
@@ -12,11 +14,15 @@ class VideoPlayerPage extends StatefulWidget {
     required this.api,
     required this.path,
     required this.name,
+    required this.size,
+    required this.mtime,
   });
 
   final FoxelApi api;
   final String path;
   final String name;
+  final int size;
+  final int mtime;
 
   @override
   State<VideoPlayerPage> createState() => _VideoPlayerPageState();
@@ -25,12 +31,18 @@ class VideoPlayerPage extends StatefulWidget {
 class _VideoPlayerPageState extends State<VideoPlayerPage> {
   static const _seekStep = Duration(seconds: 10);
   static const _hideControlsDelay = Duration(seconds: 3);
+  static const _savePositionInterval = Duration(seconds: 5);
   static const _playbackSpeeds = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
 
-  late final VideoPlayerController _controller;
+  VideoPlayerController? _controller;
   late final Future<void> _initFuture;
+  late final VideoCacheProxy _cacheProxy;
+  final _playbackStore = VideoPlaybackStore();
 
   Timer? _hideControlsTimer;
+  Timer? _savePositionTimer;
+  StreamSubscription<List<CachedVideoRange>>? _cachedRangesSubscription;
+  List<CachedVideoRange> _cachedRanges = const [];
   bool _showControls = true;
   bool _isFullScreen = false;
   bool _isLandscape = false;
@@ -42,26 +54,48 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
   @override
   void initState() {
     super.initState();
-    _controller = VideoPlayerController.networkUrl(
-      widget.api.streamUri(widget.path),
-      httpHeaders: widget.api.authHeaders(),
+    _cacheProxy = VideoCacheProxy(
+      api: widget.api,
+      path: widget.path,
+      size: widget.size,
+      mtime: widget.mtime,
     );
-    _controller.addListener(_handleControllerChanged);
-    _initFuture = _controller.initialize().then((_) {
-      _controller.setVolume(_volume);
-      _controller.setPlaybackSpeed(_playbackSpeed);
-      _controller.play();
-      _scheduleControlsHide();
-    });
+    _initFuture = _initializePlayer();
   }
 
   @override
   void dispose() {
     _hideControlsTimer?.cancel();
-    _controller.removeListener(_handleControllerChanged);
-    _controller.dispose();
+    _savePositionTimer?.cancel();
+    _cachedRangesSubscription?.cancel();
+    unawaited(_savePlaybackPosition());
+    final controller = _controller;
+    if (controller != null) {
+      controller.removeListener(_handleControllerChanged);
+      controller.dispose();
+    }
+    unawaited(_cacheProxy.close());
     _restoreSystemSettings();
     super.dispose();
+  }
+
+  Future<void> _initializePlayer() async {
+    _cachedRangesSubscription = _cacheProxy.cachedRangesStream.listen((ranges) {
+      if (mounted) {
+        setState(() => _cachedRanges = ranges);
+      }
+    });
+    final url = await _cacheProxy.start();
+    final controller = VideoPlayerController.networkUrl(url);
+    _controller = controller;
+    controller.addListener(_handleControllerChanged);
+    await controller.initialize();
+    await controller.setVolume(_volume);
+    await controller.setPlaybackSpeed(_playbackSpeed);
+    await _restorePlaybackPosition();
+    await controller.play();
+    _startPositionTimer();
+    _scheduleControlsHide();
   }
 
   void _handleControllerChanged() {
@@ -72,11 +106,12 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
 
   void _scheduleControlsHide() {
     _hideControlsTimer?.cancel();
-    if (!_controller.value.isPlaying || !_showControls) {
+    final controller = _controller;
+    if (controller == null || !controller.value.isPlaying || !_showControls) {
       return;
     }
     _hideControlsTimer = Timer(_hideControlsDelay, () {
-      if (mounted && _controller.value.isPlaying) {
+      if (mounted && controller.value.isPlaying) {
         setState(() => _showControls = false);
       }
     });
@@ -97,46 +132,58 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
   }
 
   void _togglePlay() {
-    if (_controller.value.isPlaying) {
-      _controller.pause();
+    final controller = _controller;
+    if (controller == null) {
+      return;
+    }
+    if (controller.value.isPlaying) {
+      controller.pause();
       _showControlsTemporarily();
     } else {
-      _controller.play();
+      controller.play();
       _scheduleControlsHide();
     }
   }
 
   Future<void> _seekBy(Duration offset) async {
-    final value = _controller.value;
+    final controller = _controller;
+    if (controller == null) {
+      return;
+    }
+    final value = controller.value;
     final target = value.position + offset;
     await _seekToAndPlay(target);
     _showControlsTemporarily();
   }
 
   Future<void> _seekTo(Duration target) async {
-    final duration = _controller.value.duration;
+    final controller = _controller;
+    if (controller == null) {
+      return;
+    }
+    final duration = controller.value.duration;
     final clamped = target < Duration.zero
         ? Duration.zero
         : target > duration
         ? duration
         : target;
-    await _controller.seekTo(clamped);
+    await controller.seekTo(clamped);
   }
 
   Future<void> _seekToAndPlay(Duration target) async {
     await _seekTo(target);
-    await _controller.play();
+    await _controller?.play();
   }
 
   Future<void> _setPlaybackSpeed(double speed) async {
     setState(() => _playbackSpeed = speed);
-    await _controller.setPlaybackSpeed(speed);
+    await _controller?.setPlaybackSpeed(speed);
     _showControlsTemporarily();
   }
 
   Future<void> _setVolume(double volume) async {
     setState(() => _volume = volume);
-    await _controller.setVolume(volume);
+    await _controller?.setVolume(volume);
     _showControlsTemporarily();
   }
 
@@ -190,6 +237,51 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
     await _restoreSystemUi();
   }
 
+  Future<void> _restorePlaybackPosition() async {
+    final controller = _controller;
+    if (controller == null) {
+      return;
+    }
+    final saved = await _playbackStore.load(api: widget.api, path: widget.path);
+    final duration = controller.value.duration;
+    if (saved == null ||
+        saved <= const Duration(seconds: 3) ||
+        duration <= Duration.zero ||
+        duration - saved <= const Duration(seconds: 10)) {
+      return;
+    }
+    await controller.seekTo(saved);
+  }
+
+  void _startPositionTimer() {
+    _savePositionTimer?.cancel();
+    _savePositionTimer = Timer.periodic(
+      _savePositionInterval,
+      (_) => unawaited(_savePlaybackPosition()),
+    );
+  }
+
+  Future<void> _savePlaybackPosition() async {
+    final controller = _controller;
+    if (controller == null || !controller.value.isInitialized) {
+      return;
+    }
+    final position = controller.value.position;
+    final duration = controller.value.duration;
+    if (duration > Duration.zero &&
+        duration - position <= const Duration(seconds: 10)) {
+      await _playbackStore.clear(api: widget.api, path: widget.path);
+      return;
+    }
+    if (position > const Duration(seconds: 3)) {
+      await _playbackStore.save(
+        api: widget.api,
+        path: widget.path,
+        position: position,
+      );
+    }
+  }
+
   String _formatDuration(Duration duration) {
     final totalSeconds = duration.inSeconds;
     final hours = totalSeconds ~/ 3600;
@@ -228,7 +320,11 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
   }
 
   Widget _buildPlayer() {
-    final value = _controller.value;
+    final controller = _controller;
+    if (controller == null) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    final value = controller.value;
     final duration = value.duration;
     final position = _isDraggingProgress
         ? duration * _dragProgress
@@ -242,7 +338,7 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
           Center(
             child: AspectRatio(
               aspectRatio: value.aspectRatio == 0 ? 16 / 9 : value.aspectRatio,
-              child: VideoPlayer(_controller),
+              child: VideoPlayer(controller),
             ),
           ),
           if (_showControls)
@@ -334,7 +430,11 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
     final progress = duration.inMilliseconds == 0
         ? 0.0
         : (position.inMilliseconds / duration.inMilliseconds).clamp(0.0, 1.0);
-    final bufferedProgress = _bufferedProgress(bufferedRanges, duration);
+    final cachedRanges = _cachedDurationRanges(duration);
+    final bufferedProgress = _bufferedProgress([
+      ...bufferedRanges,
+      ...cachedRanges,
+    ], duration);
 
     return SafeArea(
       top: false,
@@ -448,10 +548,7 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
     );
   }
 
-  double _bufferedProgress(
-    List<DurationRange> ranges,
-    Duration duration,
-  ) {
+  double _bufferedProgress(List<DurationRange> ranges, Duration duration) {
     if (duration.inMilliseconds <= 0 || ranges.isEmpty) {
       return 0;
     }
@@ -461,7 +558,19 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
     return (maxBuffered / duration.inMilliseconds).clamp(0.0, 1.0);
   }
 
+  List<DurationRange> _cachedDurationRanges(Duration duration) {
+    if (widget.size <= 0 || duration.inMilliseconds <= 0) {
+      return const [];
+    }
+    return _cachedRanges.map((range) {
+      final start = duration * (range.start / widget.size);
+      final end = duration * ((range.end + 1) / widget.size).clamp(0.0, 1.0);
+      return DurationRange(start, end);
+    }).toList();
+  }
+
   List<Widget> _playbackButtons() {
+    final isPlaying = _controller?.value.isPlaying ?? false;
     return [
       IconButton(
         onPressed: () => _seekBy(-_seekStep),
@@ -472,12 +581,8 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
       IconButton.filled(
         onPressed: _togglePlay,
         iconSize: 30,
-        icon: Icon(
-          _controller.value.isPlaying
-              ? Icons.pause_rounded
-              : Icons.play_arrow_rounded,
-        ),
-        tooltip: _controller.value.isPlaying ? '暂停' : '播放',
+        icon: Icon(isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded),
+        tooltip: isPlaying ? '暂停' : '播放',
       ),
       IconButton(
         onPressed: () => _seekBy(_seekStep),
@@ -614,8 +719,7 @@ class _VideoSeekBarPainter extends CustomPainter {
     final radius = Radius.circular(_VideoSeekBar._trackHeight / 2);
     final backgroundPaint = Paint()
       ..color = Colors.white.withValues(alpha: 0.22);
-    final bufferedPaint = Paint()
-      ..color = Colors.white.withValues(alpha: 0.36);
+    final bufferedPaint = Paint()..color = Colors.white.withValues(alpha: 0.36);
     final playedPaint = Paint()..color = const Color(0xFFE53935);
     final thumbPaint = Paint()..color = Colors.white;
 
