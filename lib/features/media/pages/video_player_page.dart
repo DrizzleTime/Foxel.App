@@ -2,8 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:media_kit/media_kit.dart';
-import 'package:media_kit_video/media_kit_video.dart';
+import 'package:video_player/video_player.dart';
 
 import 'package:foxel/core/api/foxel_api.dart';
 
@@ -26,13 +25,10 @@ class VideoPlayerPage extends StatefulWidget {
 class _VideoPlayerPageState extends State<VideoPlayerPage> {
   static const _seekStep = Duration(seconds: 10);
   static const _hideControlsDelay = Duration(seconds: 3);
-  static const _playerBufferSize = 128 * 1024 * 1024;
   static const _playbackSpeeds = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
 
-  late final Player _player;
-  late final VideoController _videoController;
+  late final VideoPlayerController _controller;
   late final Future<void> _initFuture;
-  final List<StreamSubscription<dynamic>> _subscriptions = [];
 
   Timer? _hideControlsTimer;
   bool _showControls = true;
@@ -46,53 +42,29 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
   @override
   void initState() {
     super.initState();
-    _player = Player(
-      configuration: const PlayerConfiguration(bufferSize: _playerBufferSize),
+    _controller = VideoPlayerController.networkUrl(
+      widget.api.streamUri(widget.path),
+      httpHeaders: widget.api.authHeaders(),
     );
-    _videoController = VideoController(_player);
-    _listenToPlayerChanges();
-    _initFuture = _initializePlayer();
+    _controller.addListener(_handleControllerChanged);
+    _initFuture = _controller.initialize().then((_) {
+      _controller.setVolume(_volume);
+      _controller.setPlaybackSpeed(_playbackSpeed);
+      _controller.play();
+      _scheduleControlsHide();
+    });
   }
 
   @override
   void dispose() {
     _hideControlsTimer?.cancel();
-    for (final subscription in _subscriptions) {
-      subscription.cancel();
-    }
-    _player.dispose();
+    _controller.removeListener(_handleControllerChanged);
+    _controller.dispose();
     _restoreSystemSettings();
     super.dispose();
   }
 
-  Future<void> _initializePlayer() async {
-    await _player.setVolume(_volume * 100);
-    await _player.setRate(_playbackSpeed);
-    await _player.open(
-      Media(
-        widget.api.streamUri(widget.path).toString(),
-        httpHeaders: widget.api.authHeaders(),
-      ),
-      play: true,
-    );
-    _scheduleControlsHide();
-  }
-
-  void _listenToPlayerChanges() {
-    void listen<T>(Stream<T> stream) {
-      _subscriptions.add(stream.listen((_) => _handlePlayerChanged()));
-    }
-
-    listen(_player.stream.playing);
-    listen(_player.stream.position);
-    listen(_player.stream.duration);
-    listen(_player.stream.buffer);
-    listen(_player.stream.buffering);
-    listen(_player.stream.width);
-    listen(_player.stream.height);
-  }
-
-  void _handlePlayerChanged() {
+  void _handleControllerChanged() {
     if (mounted) {
       setState(() {});
     }
@@ -100,11 +72,11 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
 
   void _scheduleControlsHide() {
     _hideControlsTimer?.cancel();
-    if (!_player.state.playing || !_showControls) {
+    if (!_controller.value.isPlaying || !_showControls) {
       return;
     }
     _hideControlsTimer = Timer(_hideControlsDelay, () {
-      if (mounted && _player.state.playing) {
+      if (mounted && _controller.value.isPlaying) {
         setState(() => _showControls = false);
       }
     });
@@ -125,45 +97,46 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
   }
 
   void _togglePlay() {
-    if (_player.state.playing) {
-      _player.pause();
+    if (_controller.value.isPlaying) {
+      _controller.pause();
       _showControlsTemporarily();
     } else {
-      _player.play();
+      _controller.play();
       _scheduleControlsHide();
     }
   }
 
   Future<void> _seekBy(Duration offset) async {
-    final target = _player.state.position + offset;
+    final value = _controller.value;
+    final target = value.position + offset;
     await _seekToAndPlay(target);
     _showControlsTemporarily();
   }
 
   Future<void> _seekTo(Duration target) async {
-    final duration = _player.state.duration;
+    final duration = _controller.value.duration;
     final clamped = target < Duration.zero
         ? Duration.zero
         : target > duration
         ? duration
         : target;
-    await _player.seek(clamped);
+    await _controller.seekTo(clamped);
   }
 
   Future<void> _seekToAndPlay(Duration target) async {
     await _seekTo(target);
-    await _player.play();
+    await _controller.play();
   }
 
   Future<void> _setPlaybackSpeed(double speed) async {
     setState(() => _playbackSpeed = speed);
-    await _player.setRate(speed);
+    await _controller.setPlaybackSpeed(speed);
     _showControlsTemporarily();
   }
 
   Future<void> _setVolume(double volume) async {
     setState(() => _volume = volume);
-    await _player.setVolume(volume * 100);
+    await _controller.setVolume(volume);
     _showControlsTemporarily();
   }
 
@@ -255,11 +228,11 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
   }
 
   Widget _buildPlayer() {
-    final state = _player.state;
-    final duration = state.duration;
+    final value = _controller.value;
+    final duration = value.duration;
     final position = _isDraggingProgress
         ? duration * _dragProgress
-        : state.position;
+        : value.position;
 
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
@@ -268,14 +241,8 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
         children: [
           Center(
             child: AspectRatio(
-              aspectRatio: _aspectRatio(),
-              child: Video(
-                controller: _videoController,
-                controls: NoVideoControls,
-                fill: const Color(0x00000000),
-                pauseUponEnteringBackgroundMode: false,
-                resumeUponEnteringForegroundMode: false,
-              ),
+              aspectRatio: value.aspectRatio == 0 ? 16 / 9 : value.aspectRatio,
+              child: VideoPlayer(_controller),
             ),
           ),
           if (_showControls)
@@ -301,7 +268,7 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
                 onPressed: _togglePlay,
                 iconSize: 48,
                 icon: Icon(
-                  state.playing
+                  value.isPlaying
                       ? Icons.pause_rounded
                       : Icons.play_arrow_rounded,
                 ),
@@ -312,20 +279,15 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
               left: 0,
               right: 0,
               bottom: 0,
-              child: _buildBottomControls(position, duration, state.buffer),
+              child: _buildBottomControls(
+                position: position,
+                duration: duration,
+                bufferedRanges: value.buffered,
+              ),
             ),
         ],
       ),
     );
-  }
-
-  double _aspectRatio() {
-    final width = _player.state.width ?? 0;
-    final height = _player.state.height ?? 0;
-    if (width <= 0 || height <= 0) {
-      return 16 / 9;
-    }
-    return width / height;
   }
 
   Widget _buildTopBar() {
@@ -364,17 +326,15 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
     );
   }
 
-  Widget _buildBottomControls(
-    Duration position,
-    Duration duration,
-    Duration buffer,
-  ) {
+  Widget _buildBottomControls({
+    required Duration position,
+    required Duration duration,
+    required List<DurationRange> bufferedRanges,
+  }) {
     final progress = duration.inMilliseconds == 0
         ? 0.0
         : (position.inMilliseconds / duration.inMilliseconds).clamp(0.0, 1.0);
-    final bufferedProgress = duration.inMilliseconds == 0
-        ? 0.0
-        : (buffer.inMilliseconds / duration.inMilliseconds).clamp(0.0, 1.0);
+    final bufferedProgress = _bufferedProgress(bufferedRanges, duration);
 
     return SafeArea(
       top: false,
@@ -390,49 +350,27 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
                   style: const TextStyle(color: Colors.white, fontSize: 12),
                 ),
                 Expanded(
-                  child: Stack(
-                    alignment: Alignment.center,
-                    children: [
-                      Positioned.fill(
-                        child: Center(
-                          child: _BufferedProgressTrack(
-                            bufferedProgress: bufferedProgress,
-                          ),
-                        ),
-                      ),
-                      SliderTheme(
-                        data: SliderTheme.of(context).copyWith(
-                          trackHeight: 3,
-                          inactiveTrackColor: Colors.transparent,
-                          thumbShape: const RoundSliderThumbShape(
-                            enabledThumbRadius: 6,
-                          ),
-                        ),
-                        child: Slider(
-                          value: progress,
-                          min: 0,
-                          max: 1,
-                          onChangeStart: (value) {
-                            _hideControlsTimer?.cancel();
-                            setState(() {
-                              _isDraggingProgress = true;
-                              _dragProgress = value;
-                            });
-                          },
-                          onChanged: (value) {
-                            setState(() => _dragProgress = value);
-                          },
-                          onChangeEnd: (value) async {
-                            setState(() {
-                              _isDraggingProgress = false;
-                              _dragProgress = value;
-                            });
-                            await _seekToAndPlay(duration * value);
-                            _scheduleControlsHide();
-                          },
-                        ),
-                      ),
-                    ],
+                  child: _VideoSeekBar(
+                    progress: progress,
+                    bufferedProgress: bufferedProgress,
+                    onChangeStart: (value) {
+                      _hideControlsTimer?.cancel();
+                      setState(() {
+                        _isDraggingProgress = true;
+                        _dragProgress = value;
+                      });
+                    },
+                    onChanged: (value) {
+                      setState(() => _dragProgress = value);
+                    },
+                    onChangeEnd: (value) async {
+                      setState(() {
+                        _isDraggingProgress = false;
+                        _dragProgress = value;
+                      });
+                      await _seekToAndPlay(duration * value);
+                      _scheduleControlsHide();
+                    },
                   ),
                 ),
                 Text(
@@ -510,6 +448,19 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
     );
   }
 
+  double _bufferedProgress(
+    List<DurationRange> ranges,
+    Duration duration,
+  ) {
+    if (duration.inMilliseconds <= 0 || ranges.isEmpty) {
+      return 0;
+    }
+    final maxBuffered = ranges
+        .map((range) => range.end.inMilliseconds)
+        .fold<int>(0, (max, value) => value > max ? value : max);
+    return (maxBuffered / duration.inMilliseconds).clamp(0.0, 1.0);
+  }
+
   List<Widget> _playbackButtons() {
     return [
       IconButton(
@@ -522,11 +473,11 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
         onPressed: _togglePlay,
         iconSize: 30,
         icon: Icon(
-          _player.state.playing
+          _controller.value.isPlaying
               ? Icons.pause_rounded
               : Icons.play_arrow_rounded,
         ),
-        tooltip: _player.state.playing ? '暂停' : '播放',
+        tooltip: _controller.value.isPlaying ? '暂停' : '播放',
       ),
       IconButton(
         onPressed: () => _seekBy(_seekStep),
@@ -564,24 +515,149 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
   }
 }
 
-class _BufferedProgressTrack extends StatelessWidget {
-  const _BufferedProgressTrack({required this.bufferedProgress});
+class _VideoSeekBar extends StatefulWidget {
+  const _VideoSeekBar({
+    required this.progress,
+    required this.bufferedProgress,
+    required this.onChangeStart,
+    required this.onChanged,
+    required this.onChangeEnd,
+  });
 
+  final double progress;
   final double bufferedProgress;
+  final ValueChanged<double> onChangeStart;
+  final ValueChanged<double> onChanged;
+  final ValueChanged<double> onChangeEnd;
+
+  static const _trackHeight = 3.0;
+  static const _thumbRadius = 6.0;
+
+  @override
+  State<_VideoSeekBar> createState() => _VideoSeekBarState();
+}
+
+class _VideoSeekBarState extends State<_VideoSeekBar> {
+  double? _dragValue;
+
+  double get _paintProgress => _dragValue ?? widget.progress;
 
   @override
   Widget build(BuildContext context) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(2),
-      child: LinearProgressIndicator(
-        minHeight: 3,
-        value: bufferedProgress,
-        backgroundColor: Colors.white.withValues(alpha: 0.22),
-        valueColor: AlwaysStoppedAnimation<Color>(
-          Colors.white.withValues(alpha: 0.36),
-        ),
+    return SizedBox(
+      height: 32,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          double valueFromPosition(double dx) {
+            if (constraints.maxWidth <= 0) {
+              return 0;
+            }
+            return (dx / constraints.maxWidth).clamp(0.0, 1.0);
+          }
+
+          void update(Offset localPosition, ValueChanged<double> callback) {
+            final value = valueFromPosition(localPosition.dx);
+            setState(() => _dragValue = value);
+            callback(value);
+          }
+
+          return GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTapDown: (details) {
+              final value = valueFromPosition(details.localPosition.dx);
+              widget.onChangeStart(value);
+              widget.onChangeEnd(value);
+            },
+            onHorizontalDragStart: (details) {
+              update(details.localPosition, widget.onChangeStart);
+            },
+            onHorizontalDragUpdate: (details) {
+              update(details.localPosition, widget.onChanged);
+            },
+            onHorizontalDragEnd: (_) {
+              final value = _paintProgress;
+              setState(() => _dragValue = null);
+              widget.onChangeEnd(value);
+            },
+            child: CustomPaint(
+              painter: _VideoSeekBarPainter(
+                progress: _paintProgress,
+                bufferedProgress: widget.bufferedProgress,
+              ),
+              child: const SizedBox.expand(),
+            ),
+          );
+        },
       ),
     );
+  }
+}
+
+class _VideoSeekBarPainter extends CustomPainter {
+  const _VideoSeekBarPainter({
+    required this.progress,
+    required this.bufferedProgress,
+  });
+
+  final double progress;
+  final double bufferedProgress;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final centerY = size.height / 2;
+    final trackRect = Rect.fromLTWH(
+      0,
+      centerY - _VideoSeekBar._trackHeight / 2,
+      size.width,
+      _VideoSeekBar._trackHeight,
+    );
+    final radius = Radius.circular(_VideoSeekBar._trackHeight / 2);
+    final backgroundPaint = Paint()
+      ..color = Colors.white.withValues(alpha: 0.22);
+    final bufferedPaint = Paint()
+      ..color = Colors.white.withValues(alpha: 0.36);
+    final playedPaint = Paint()..color = const Color(0xFFE53935);
+    final thumbPaint = Paint()..color = Colors.white;
+
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(trackRect, radius),
+      backgroundPaint,
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTWH(
+          trackRect.left,
+          trackRect.top,
+          trackRect.width * bufferedProgress,
+          trackRect.height,
+        ),
+        radius,
+      ),
+      bufferedPaint,
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTWH(
+          trackRect.left,
+          trackRect.top,
+          trackRect.width * progress,
+          trackRect.height,
+        ),
+        radius,
+      ),
+      playedPaint,
+    );
+    canvas.drawCircle(
+      Offset(trackRect.width * progress, centerY),
+      _VideoSeekBar._thumbRadius,
+      thumbPaint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_VideoSeekBarPainter oldDelegate) {
+    return progress != oldDelegate.progress ||
+        bufferedProgress != oldDelegate.bufferedProgress;
   }
 }
 
