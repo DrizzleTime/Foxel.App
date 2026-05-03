@@ -4,6 +4,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import 'package:foxel/core/api/foxel_api.dart';
+import 'package:foxel/core/models/license_info.dart';
 import 'package:foxel/features/drive/controllers/transfer_task_controller.dart';
 import 'package:foxel/features/drive/pages/account_settings_page.dart';
 import 'package:foxel/features/drive/pages/file_browser_page.dart';
@@ -18,6 +19,8 @@ class DriveShellPage extends StatefulWidget {
     required this.email,
     required this.avatarUrl,
     required this.baseUrl,
+    required this.licenseInfo,
+    required this.onVerifyLicense,
     required this.onOpenSettings,
     required this.onLogout,
   });
@@ -27,6 +30,8 @@ class DriveShellPage extends StatefulWidget {
   final String email;
   final String avatarUrl;
   final String baseUrl;
+  final LicenseInfo? licenseInfo;
+  final Future<LicenseInfo> Function(String licenseKey) onVerifyLicense;
   final VoidCallback onOpenSettings;
   final VoidCallback onLogout;
 
@@ -54,7 +59,8 @@ class _DriveShellPageState extends State<DriveShellPage> {
         oldWidget.username != widget.username ||
         oldWidget.email != widget.email ||
         oldWidget.avatarUrl != widget.avatarUrl ||
-        oldWidget.baseUrl != widget.baseUrl) {
+        oldWidget.baseUrl != widget.baseUrl ||
+        oldWidget.licenseInfo != widget.licenseInfo) {
       for (var index = 0; index < _tabs.length; index++) {
         _tabs[index] = null;
       }
@@ -89,6 +95,7 @@ class _DriveShellPageState extends State<DriveShellPage> {
         api: widget.api,
         username: widget.username,
         avatarUrl: widget.avatarUrl,
+        isPro: widget.licenseInfo?.isPro ?? false,
         onOpenFiles: () => _selectIndex(1),
         taskController: _taskController,
         onOpenTasks: () => _selectIndex(2),
@@ -96,6 +103,7 @@ class _DriveShellPageState extends State<DriveShellPage> {
       ),
       1 => FileBrowserPage(
         api: widget.api,
+        canPlayVideo: widget.licenseInfo?.isPro ?? false,
         taskController: _taskController,
         onOpenTasks: () => _selectIndex(2),
       ),
@@ -105,6 +113,8 @@ class _DriveShellPageState extends State<DriveShellPage> {
         email: widget.email,
         avatarUrl: widget.avatarUrl,
         baseUrl: widget.baseUrl,
+        licenseInfo: widget.licenseInfo,
+        onVerifyLicense: widget.onVerifyLicense,
         onSwitchServer: widget.onOpenSettings,
         onLogout: widget.onLogout,
       ),

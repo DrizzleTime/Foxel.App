@@ -50,6 +50,7 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
   double _dragProgress = 0;
   double _volume = 1;
   double _playbackSpeed = 1;
+  String? _lastControllerLogSignature;
 
   @override
   void initState() {
@@ -80,25 +81,64 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
   }
 
   Future<void> _initializePlayer() async {
-    _cachedRangesSubscription = _cacheProxy.cachedRangesStream.listen((ranges) {
-      if (mounted) {
-        setState(() => _cachedRanges = ranges);
-      }
-    });
-    final url = await _cacheProxy.start();
-    final controller = VideoPlayerController.networkUrl(url);
-    _controller = controller;
-    controller.addListener(_handleControllerChanged);
-    await controller.initialize();
-    await controller.setVolume(_volume);
-    await controller.setPlaybackSpeed(_playbackSpeed);
-    await _restorePlaybackPosition();
-    await controller.play();
-    _startPositionTimer();
-    _scheduleControlsHide();
+    _log(
+      'initialize start path=${widget.path} name=${widget.name} '
+      'size=${widget.size} mtime=${widget.mtime}',
+    );
+    try {
+      _cachedRangesSubscription = _cacheProxy.cachedRangesStream.listen((
+        ranges,
+      ) {
+        _log('cached ranges updated count=${ranges.length}');
+        if (mounted) {
+          setState(() => _cachedRanges = ranges);
+        }
+      });
+      final url = await _cacheProxy.start();
+      _log('cache proxy url=$url');
+      final controller = VideoPlayerController.networkUrl(url);
+      _controller = controller;
+      controller.addListener(_handleControllerChanged);
+      _log('controller initialize begin');
+      await controller.initialize();
+      _logControllerValue('controller initialized', controller.value);
+      await controller.setVolume(_volume);
+      await controller.setPlaybackSpeed(_playbackSpeed);
+      await _restorePlaybackPosition();
+      await controller.play();
+      _logControllerValue('play requested', controller.value);
+      _startPositionTimer();
+      _scheduleControlsHide();
+    } catch (error, stackTrace) {
+      _log('initialize failed: $error');
+      debugPrintStack(
+        label: '[VideoPlayer] initialize stack',
+        stackTrace: stackTrace,
+      );
+      rethrow;
+    }
   }
 
   void _handleControllerChanged() {
+    final controller = _controller;
+    if (controller != null) {
+      final value = controller.value;
+      final signature = [
+        value.isInitialized,
+        value.isPlaying,
+        value.isBuffering,
+        value.hasError,
+        value.errorDescription,
+        value.duration.inMilliseconds,
+        value.position.inMilliseconds ~/ 1000,
+        value.size.width,
+        value.size.height,
+      ].join('|');
+      if (signature != _lastControllerLogSignature) {
+        _lastControllerLogSignature = signature;
+        _logControllerValue('controller changed', value);
+      }
+    }
     if (mounted) {
       setState(() {});
     }
@@ -248,9 +288,24 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
         saved <= const Duration(seconds: 3) ||
         duration <= Duration.zero ||
         duration - saved <= const Duration(seconds: 10)) {
+      _log('skip restore position saved=$saved duration=$duration');
       return;
     }
+    _log('restore position saved=$saved duration=$duration');
     await controller.seekTo(saved);
+  }
+
+  void _logControllerValue(String event, VideoPlayerValue value) {
+    _log(
+      '$event initialized=${value.isInitialized} playing=${value.isPlaying} '
+      'buffering=${value.isBuffering} duration=${value.duration} '
+      'position=${value.position} size=${value.size.width}x${value.size.height} '
+      'aspect=${value.aspectRatio} error=${value.errorDescription}',
+    );
+  }
+
+  void _log(String message) {
+    debugPrint('[VideoPlayer] $message');
   }
 
   void _startPositionTimer() {

@@ -18,11 +18,13 @@ class FileBrowserPage extends StatefulWidget {
   const FileBrowserPage({
     super.key,
     required this.api,
+    required this.canPlayVideo,
     required this.taskController,
     required this.onOpenTasks,
   });
 
   final FoxelApi api;
+  final bool canPlayVideo;
   final TransferTaskController taskController;
   final VoidCallback onOpenTasks;
 
@@ -294,6 +296,10 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
       return;
     }
     if (_isVideo(lower)) {
+      if (!widget.canPlayVideo) {
+        _showMessage('当前服务未验证 Pro，无法在线播放视频');
+        return;
+      }
       Navigator.of(context).push(
         MaterialPageRoute<void>(
           builder: (_) => VideoPlayerPage(
@@ -1129,12 +1135,13 @@ class _BreadcrumbBar extends StatelessWidget {
     var current = '';
     for (final segment in segments) {
       current = FoxelApi.joinPath(current.isEmpty ? '/' : current, segment);
+      final segmentPath = current;
       chips.add(const Icon(Icons.chevron_right_rounded, size: 18));
       chips.add(
         _BreadcrumbChip(
           label: segment,
-          selected: current == path,
-          onTap: () => onOpenPath(current),
+          selected: segmentPath == path,
+          onTap: () => onOpenPath(segmentPath),
         ),
       );
     }

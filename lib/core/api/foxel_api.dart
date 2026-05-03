@@ -243,6 +243,18 @@ class FoxelApi {
 
   static String encodePath(String path) => path_utils.encodePath(path);
 
+  static String appAddressFromBaseUrl(String baseUrl) {
+    final uri = Uri.parse(normalizeBaseUrl(baseUrl));
+    final host = uri.host;
+    if (host.isEmpty) {
+      return '';
+    }
+    if (uri.hasPort) {
+      return '$host:${uri.port}';
+    }
+    return host;
+  }
+
   Future<Map<String, dynamic>> _getJson(
     String path, [
     Map<String, String>? query,
