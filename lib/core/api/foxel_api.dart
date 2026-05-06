@@ -85,6 +85,16 @@ class FoxelApi {
     return UserProfile.fromJson(data);
   }
 
+  Future<DirectoryListing> listRecentFiles({int pageSize = 6}) async {
+    final data = await _getJson('/fs/recent', {
+      'page': '1',
+      'page_size': '$pageSize',
+      'sort_by': 'mtime',
+      'sort_order': 'desc',
+    });
+    return DirectoryListing.fromJson(data);
+  }
+
   Future<DirectoryListing> listDirectory(String path) async {
     final cleaned = path_utils.cleanPath(path);
     final endpoint = cleaned == '/'

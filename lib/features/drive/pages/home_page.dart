@@ -49,10 +49,16 @@ class _HomePageState extends State<HomePage> {
 
   Future<_HomeData> _loadHomeData() async {
     final listingFuture = widget.api.listDirectory('/');
+    final recentFuture = widget.api.listRecentFiles();
     final usagesFuture = widget.api.adapterUsages();
     final listing = await listingFuture;
+    final recent = await recentFuture;
     final usages = await usagesFuture;
-    return _HomeData(listing: listing, storage: _storageFor(usages));
+    return _HomeData(
+      listing: listing,
+      recentEntries: recent.entries,
+      storage: _storageFor(usages),
+    );
   }
 
   void _showMessage(String message) {
@@ -210,9 +216,7 @@ class _HomePageState extends State<HomePage> {
               final data = snapshot.data;
               final entries = data?.listing.entries ?? const <FileEntry>[];
               final storage = data?.storage ?? _StorageSummary.empty;
-              final recent = [...entries]
-                ..sort((a, b) => b.mtime.compareTo(a.mtime));
-              final topRecent = recent.take(6).toList();
+              final topRecent = data?.recentEntries ?? const <FileEntry>[];
 
               return ListView(
                 physics: const AlwaysScrollableScrollPhysics(),
@@ -277,9 +281,14 @@ class _HomePageState extends State<HomePage> {
 }
 
 class _HomeData {
-  const _HomeData({required this.listing, required this.storage});
+  const _HomeData({
+    required this.listing,
+    required this.recentEntries,
+    required this.storage,
+  });
 
   final DirectoryListing listing;
+  final List<FileEntry> recentEntries;
   final _StorageSummary storage;
 }
 
