@@ -414,12 +414,13 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
           Positioned.fill(
             child: _buildPosterBackground(visible: showLoadingSurface),
           ),
-          Center(
-            child: AspectRatio(
-              aspectRatio: _aspectRatio,
-              child: Video(controller: _videoController, controls: null),
+          if (!showLoadingSurface)
+            Center(
+              child: AspectRatio(
+                aspectRatio: _aspectRatio,
+                child: Video(controller: _videoController, controls: null),
+              ),
             ),
-          ),
           if (showLoadingSurface)
             const Positioned.fill(
               child: Center(child: CircularProgressIndicator()),
