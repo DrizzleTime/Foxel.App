@@ -2,10 +2,10 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:video_player/video_player.dart';
+import 'package:media_kit/media_kit.dart';
+import 'package:media_kit_video/media_kit_video.dart';
 
 import 'package:foxel/core/api/foxel_api.dart';
-import 'package:foxel/features/media/services/video_cache_proxy.dart';
 import 'package:foxel/features/media/services/video_playback_store.dart';
 
 class VideoPlayerPage extends StatefulWidget {
@@ -34,36 +34,40 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
   static const _savePositionInterval = Duration(seconds: 5);
   static const _playbackSpeeds = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
 
-  VideoPlayerController? _controller;
+  late final Player _player;
+  late final VideoController _videoController;
   late final Future<void> _initFuture;
-  late final VideoCacheProxy _cacheProxy;
   late final ImageProvider _posterProvider;
   final _playbackStore = VideoPlaybackStore();
 
   Timer? _hideControlsTimer;
   Timer? _savePositionTimer;
-  StreamSubscription<List<CachedVideoRange>>? _cachedRangesSubscription;
-  List<CachedVideoRange> _cachedRanges = const [];
+  final _playerSubscriptions = <StreamSubscription<dynamic>>[];
   bool _showControls = true;
   bool _isFullScreen = false;
   bool _isLandscape = false;
   bool _isDraggingProgress = false;
   bool _showVideoSurface = false;
   bool _didPrecachePoster = false;
+  bool _isPlaying = false;
+  bool _isBuffering = false;
+  bool _isCompleted = false;
+  Duration _position = Duration.zero;
+  Duration _duration = Duration.zero;
+  Duration _buffer = Duration.zero;
+  int? _videoWidth;
+  int? _videoHeight;
   double _dragProgress = 0;
   double _volume = 1;
   double _playbackSpeed = 1;
-  String? _lastControllerLogSignature;
+  String? _playbackError;
+  String? _lastPlayerLogSignature;
 
   @override
   void initState() {
     super.initState();
-    _cacheProxy = VideoCacheProxy(
-      api: widget.api,
-      path: widget.path,
-      size: widget.size,
-      mtime: widget.mtime,
-    );
+    _player = Player();
+    _videoController = VideoController(_player);
     _posterProvider = NetworkImage(
       widget.api.thumbnailUri(widget.path, width: 960, height: 960).toString(),
       headers: widget.api.authHeaders(),
@@ -89,14 +93,11 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
   void dispose() {
     _hideControlsTimer?.cancel();
     _savePositionTimer?.cancel();
-    _cachedRangesSubscription?.cancel();
-    unawaited(_savePlaybackPosition());
-    final controller = _controller;
-    if (controller != null) {
-      controller.removeListener(_handleControllerChanged);
-      controller.dispose();
+    for (final subscription in _playerSubscriptions) {
+      unawaited(subscription.cancel());
     }
-    unawaited(_cacheProxy.close());
+    unawaited(_savePlaybackPosition());
+    unawaited(_player.dispose());
     _restoreSystemSettings();
     super.dispose();
   }
@@ -107,27 +108,26 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
       'size=${widget.size} mtime=${widget.mtime}',
     );
     try {
-      _cachedRangesSubscription = _cacheProxy.cachedRangesStream.listen((
-        ranges,
-      ) {
-        _log('cached ranges updated count=${ranges.length}');
-        if (mounted) {
-          setState(() => _cachedRanges = ranges);
-        }
-      });
-      final url = await _cacheProxy.start();
-      _log('cache proxy url=$url');
-      final controller = VideoPlayerController.networkUrl(url);
-      _controller = controller;
-      controller.addListener(_handleControllerChanged);
-      _log('controller initialize begin');
-      await controller.initialize();
-      _logControllerValue('controller initialized', controller.value);
-      await controller.setVolume(_volume);
-      await controller.setPlaybackSpeed(_playbackSpeed);
-      await _restorePlaybackPosition();
-      await controller.play();
-      _logControllerValue('play requested', controller.value);
+      _listenToPlayer();
+      await _player.setVolume(_volume * 100);
+      await _player.setRate(_playbackSpeed);
+      final savedPosition = await _playbackStore.load(
+        api: widget.api,
+        path: widget.path,
+      );
+      final startPosition =
+          savedPosition != null && savedPosition > const Duration(seconds: 3)
+          ? savedPosition
+          : null;
+      _log('open media url=${widget.api.streamUri(widget.path)}');
+      await _player.open(
+        Media(
+          widget.api.streamUri(widget.path).toString(),
+          httpHeaders: widget.api.authHeaders(),
+          start: startPosition,
+        ),
+      );
+      _log('media opened start=$startPosition');
       _startPositionTimer();
       _scheduleControlsHide();
     } catch (error, stackTrace) {
@@ -140,31 +140,69 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
     }
   }
 
-  void _handleControllerChanged() {
-    final controller = _controller;
-    if (controller != null) {
-      final value = controller.value;
-      final shouldShowVideoSurface =
-          value.isInitialized &&
-          (value.position > Duration.zero || value.isCompleted);
-      if (shouldShowVideoSurface && !_showVideoSurface) {
-        _showVideoSurface = true;
-      }
-      final signature = [
-        value.isInitialized,
-        value.isPlaying,
-        value.isBuffering,
-        value.hasError,
-        value.errorDescription,
-        value.duration.inMilliseconds,
-        value.position.inMilliseconds ~/ 1000,
-        value.size.width,
-        value.size.height,
-      ].join('|');
-      if (signature != _lastControllerLogSignature) {
-        _lastControllerLogSignature = signature;
-        _logControllerValue('controller changed', value);
-      }
+  void _listenToPlayer() {
+    _playerSubscriptions.addAll([
+      _player.stream.playing.listen((value) {
+        _isPlaying = value;
+        _handlePlayerChanged();
+      }),
+      _player.stream.buffering.listen((value) {
+        _isBuffering = value;
+        _handlePlayerChanged();
+      }),
+      _player.stream.completed.listen((value) {
+        _isCompleted = value;
+        _handlePlayerChanged();
+      }),
+      _player.stream.position.listen((value) {
+        _position = value;
+        _handlePlayerChanged();
+      }),
+      _player.stream.duration.listen((value) {
+        _duration = value;
+        _handlePlayerChanged();
+      }),
+      _player.stream.buffer.listen((value) {
+        _buffer = value;
+        _handlePlayerChanged();
+      }),
+      _player.stream.width.listen((value) {
+        _videoWidth = value;
+        _handlePlayerChanged();
+      }),
+      _player.stream.height.listen((value) {
+        _videoHeight = value;
+        _handlePlayerChanged();
+      }),
+      _player.stream.error.listen((value) {
+        _playbackError = value;
+        _log('player error: $value');
+        _handlePlayerChanged();
+      }),
+    ]);
+  }
+
+  void _handlePlayerChanged() {
+    final shouldShowVideoSurface =
+        _duration > Duration.zero &&
+        (_position > Duration.zero || _isCompleted);
+    if (shouldShowVideoSurface && !_showVideoSurface) {
+      _showVideoSurface = true;
+    }
+    final signature = [
+      _isPlaying,
+      _isBuffering,
+      _isCompleted,
+      _playbackError,
+      _duration.inMilliseconds,
+      _position.inMilliseconds ~/ 1000,
+      _buffer.inMilliseconds ~/ 1000,
+      _videoWidth,
+      _videoHeight,
+    ].join('|');
+    if (signature != _lastPlayerLogSignature) {
+      _lastPlayerLogSignature = signature;
+      _logPlayerValue('player changed');
     }
     if (mounted) {
       setState(() {});
@@ -173,12 +211,11 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
 
   void _scheduleControlsHide() {
     _hideControlsTimer?.cancel();
-    final controller = _controller;
-    if (controller == null || !controller.value.isPlaying || !_showControls) {
+    if (!_isPlaying || !_showControls) {
       return;
     }
     _hideControlsTimer = Timer(_hideControlsDelay, () {
-      if (mounted && controller.value.isPlaying) {
+      if (mounted && _isPlaying) {
         setState(() => _showControls = false);
       }
     });
@@ -199,58 +236,44 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
   }
 
   void _togglePlay() {
-    final controller = _controller;
-    if (controller == null) {
-      return;
-    }
-    if (controller.value.isPlaying) {
-      controller.pause();
+    if (_isPlaying) {
+      unawaited(_player.pause());
       _showControlsTemporarily();
     } else {
-      controller.play();
+      unawaited(_player.play());
       _scheduleControlsHide();
     }
   }
 
   Future<void> _seekBy(Duration offset) async {
-    final controller = _controller;
-    if (controller == null) {
-      return;
-    }
-    final value = controller.value;
-    final target = value.position + offset;
+    final target = _position + offset;
     await _seekToAndPlay(target);
     _showControlsTemporarily();
   }
 
   Future<void> _seekTo(Duration target) async {
-    final controller = _controller;
-    if (controller == null) {
-      return;
-    }
-    final duration = controller.value.duration;
     final clamped = target < Duration.zero
         ? Duration.zero
-        : target > duration
-        ? duration
+        : target > _duration
+        ? _duration
         : target;
-    await controller.seekTo(clamped);
+    await _player.seek(clamped);
   }
 
   Future<void> _seekToAndPlay(Duration target) async {
     await _seekTo(target);
-    await _controller?.play();
+    await _player.play();
   }
 
   Future<void> _setPlaybackSpeed(double speed) async {
     setState(() => _playbackSpeed = speed);
-    await _controller?.setPlaybackSpeed(speed);
+    await _player.setRate(speed);
     _showControlsTemporarily();
   }
 
   Future<void> _setVolume(double volume) async {
     setState(() => _volume = volume);
-    await _controller?.setVolume(volume);
+    await _player.setVolume(volume * 100);
     _showControlsTemporarily();
   }
 
@@ -304,30 +327,11 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
     await _restoreSystemUi();
   }
 
-  Future<void> _restorePlaybackPosition() async {
-    final controller = _controller;
-    if (controller == null) {
-      return;
-    }
-    final saved = await _playbackStore.load(api: widget.api, path: widget.path);
-    final duration = controller.value.duration;
-    if (saved == null ||
-        saved <= const Duration(seconds: 3) ||
-        duration <= Duration.zero ||
-        duration - saved <= const Duration(seconds: 10)) {
-      _log('skip restore position saved=$saved duration=$duration');
-      return;
-    }
-    _log('restore position saved=$saved duration=$duration');
-    await controller.seekTo(saved);
-  }
-
-  void _logControllerValue(String event, VideoPlayerValue value) {
+  void _logPlayerValue(String event) {
     _log(
-      '$event initialized=${value.isInitialized} playing=${value.isPlaying} '
-      'buffering=${value.isBuffering} duration=${value.duration} '
-      'position=${value.position} size=${value.size.width}x${value.size.height} '
-      'aspect=${value.aspectRatio} error=${value.errorDescription}',
+      '$event playing=$_isPlaying buffering=$_isBuffering '
+      'completed=$_isCompleted duration=$_duration position=$_position '
+      'buffer=$_buffer size=$_videoWidth x $_videoHeight error=$_playbackError',
     );
   }
 
@@ -344,22 +348,18 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
   }
 
   Future<void> _savePlaybackPosition() async {
-    final controller = _controller;
-    if (controller == null || !controller.value.isInitialized) {
+    if (_duration <= Duration.zero) {
       return;
     }
-    final position = controller.value.position;
-    final duration = controller.value.duration;
-    if (duration > Duration.zero &&
-        duration - position <= const Duration(seconds: 10)) {
+    if (_duration - _position <= const Duration(seconds: 10)) {
       await _playbackStore.clear(api: widget.api, path: widget.path);
       return;
     }
-    if (position > const Duration(seconds: 3)) {
+    if (_position > const Duration(seconds: 3)) {
       await _playbackStore.save(
         api: widget.api,
         path: widget.path,
-        position: position,
+        position: _position,
       );
     }
   }
@@ -402,15 +402,8 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
   }
 
   Widget _buildPlayer() {
-    final controller = _controller;
-    if (controller == null) {
-      return _buildLoadingSurface();
-    }
-    final value = controller.value;
-    final duration = value.duration;
-    final position = _isDraggingProgress
-        ? duration * _dragProgress
-        : value.position;
+    final duration = _duration;
+    final position = _isDraggingProgress ? duration * _dragProgress : _position;
     final showLoadingSurface = !_showVideoSurface;
 
     return GestureDetector(
@@ -423,8 +416,8 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
           ),
           Center(
             child: AspectRatio(
-              aspectRatio: value.aspectRatio == 0 ? 16 / 9 : value.aspectRatio,
-              child: VideoPlayer(controller),
+              aspectRatio: _aspectRatio,
+              child: Video(controller: _videoController, controls: null),
             ),
           ),
           if (showLoadingSurface)
@@ -454,9 +447,7 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
                 onPressed: _togglePlay,
                 iconSize: 48,
                 icon: Icon(
-                  value.isPlaying
-                      ? Icons.pause_rounded
-                      : Icons.play_arrow_rounded,
+                  _isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
                 ),
               ),
             ),
@@ -468,7 +459,7 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
               child: _buildBottomControls(
                 position: position,
                 duration: duration,
-                bufferedRanges: value.buffered,
+                bufferedPosition: _buffer,
               ),
             ),
         ],
@@ -540,16 +531,17 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
   Widget _buildBottomControls({
     required Duration position,
     required Duration duration,
-    required List<DurationRange> bufferedRanges,
+    required Duration bufferedPosition,
   }) {
     final progress = duration.inMilliseconds == 0
         ? 0.0
         : (position.inMilliseconds / duration.inMilliseconds).clamp(0.0, 1.0);
-    final cachedRanges = _cachedDurationRanges(duration);
-    final bufferedProgress = _bufferedProgress([
-      ...bufferedRanges,
-      ...cachedRanges,
-    ], duration);
+    final bufferedProgress = duration.inMilliseconds == 0
+        ? 0.0
+        : (bufferedPosition.inMilliseconds / duration.inMilliseconds).clamp(
+            0.0,
+            1.0,
+          );
 
     return SafeArea(
       top: false,
@@ -666,29 +658,7 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
     );
   }
 
-  double _bufferedProgress(List<DurationRange> ranges, Duration duration) {
-    if (duration.inMilliseconds <= 0 || ranges.isEmpty) {
-      return 0;
-    }
-    final maxBuffered = ranges
-        .map((range) => range.end.inMilliseconds)
-        .fold<int>(0, (max, value) => value > max ? value : max);
-    return (maxBuffered / duration.inMilliseconds).clamp(0.0, 1.0);
-  }
-
-  List<DurationRange> _cachedDurationRanges(Duration duration) {
-    if (widget.size <= 0 || duration.inMilliseconds <= 0) {
-      return const [];
-    }
-    return _cachedRanges.map((range) {
-      final start = duration * (range.start / widget.size);
-      final end = duration * ((range.end + 1) / widget.size).clamp(0.0, 1.0);
-      return DurationRange(start, end);
-    }).toList();
-  }
-
   List<Widget> _playbackButtons() {
-    final isPlaying = _controller?.value.isPlaying ?? false;
     return [
       IconButton(
         onPressed: () => _seekBy(-_seekStep),
@@ -699,8 +669,8 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
       IconButton.filled(
         onPressed: _togglePlay,
         iconSize: 30,
-        icon: Icon(isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded),
-        tooltip: isPlaying ? '暂停' : '播放',
+        icon: Icon(_isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded),
+        tooltip: _isPlaying ? '暂停' : '播放',
       ),
       IconButton(
         onPressed: () => _seekBy(_seekStep),
@@ -735,6 +705,15 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
       color: Colors.white,
       tooltip: _isFullScreen ? '退出全屏' : '全屏',
     );
+  }
+
+  double get _aspectRatio {
+    final width = _videoWidth;
+    final height = _videoHeight;
+    if (width == null || height == null || width <= 0 || height <= 0) {
+      return 16 / 9;
+    }
+    return width / height;
   }
 }
 
