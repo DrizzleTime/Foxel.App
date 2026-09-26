@@ -4,9 +4,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
-import 'package:foxel/core/models/license_info.dart';
 import 'package:foxel/core/storage/download_dir_store.dart';
-import 'package:foxel/features/drive/pages/license_page.dart';
 
 class AccountSettingsPage extends StatefulWidget {
   const AccountSettingsPage({
@@ -15,8 +13,6 @@ class AccountSettingsPage extends StatefulWidget {
     required this.email,
     required this.avatarUrl,
     required this.baseUrl,
-    required this.licenseInfo,
-    required this.onVerifyLicense,
     required this.onSwitchServer,
     required this.onLogout,
   });
@@ -25,8 +21,6 @@ class AccountSettingsPage extends StatefulWidget {
   final String email;
   final String avatarUrl;
   final String baseUrl;
-  final LicenseInfo? licenseInfo;
-  final Future<LicenseInfo> Function(String licenseKey) onVerifyLicense;
   final VoidCallback onSwitchServer;
   final VoidCallback onLogout;
 
@@ -80,12 +74,6 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
                   title: '下载目录',
                   subtitle: _downloadDir ?? '加载中',
                   onTap: _editDownloadDir,
-                ),
-                _SettingsRow(
-                  icon: Icons.verified_user_rounded,
-                  title: '授权',
-                  subtitle: licenseStatusText(widget.licenseInfo),
-                  onTap: _openLicensePage,
                 ),
                 _SettingsRow(
                   icon: Icons.sync_alt_rounded,
@@ -232,18 +220,6 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
         const SnackBar(content: Text('下载目录已更新')),
       );
     }
-  }
-
-  void _openLicensePage() {
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => FoxelLicensePage(
-          baseUrl: widget.baseUrl,
-          licenseInfo: widget.licenseInfo,
-          onVerifyLicense: widget.onVerifyLicense,
-        ),
-      ),
-    );
   }
 
   Future<void> _confirmLogout(BuildContext context) async {

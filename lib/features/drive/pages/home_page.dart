@@ -12,7 +12,6 @@ class HomePage extends StatefulWidget {
     required this.api,
     required this.username,
     required this.avatarUrl,
-    required this.isPro,
     required this.onOpenFiles,
     required this.taskController,
     required this.onOpenTasks,
@@ -22,7 +21,6 @@ class HomePage extends StatefulWidget {
   final FoxelApi api;
   final String username;
   final String avatarUrl;
-  final bool isPro;
   final VoidCallback onOpenFiles;
   final TransferTaskController taskController;
   final VoidCallback onOpenTasks;
@@ -53,7 +51,13 @@ class _HomePageState extends State<HomePage> {
     final usagesFuture = widget.api.adapterUsages();
     final listing = await listingFuture;
     final recent = await recentFuture;
-    final usages = await usagesFuture;
+    // 防御：容量统计接口失败或返回异常时降级为空统计，不影响首页整体展示
+    List<AdapterUsage> usages;
+    try {
+      usages = await usagesFuture;
+    } catch (_) {
+      usages = const <AdapterUsage>[];
+    }
     return _HomeData(
       listing: listing,
       recentEntries: recent.entries,
@@ -225,7 +229,6 @@ class _HomePageState extends State<HomePage> {
                   _HomeHeader(
                     username: widget.username,
                     avatarUrl: widget.avatarUrl,
-                    isPro: widget.isPro,
                     onRefresh: _refresh,
                     onOpenSettings: widget.onOpenSettings,
                   ),
@@ -328,14 +331,12 @@ class _HomeHeader extends StatelessWidget {
   const _HomeHeader({
     required this.username,
     required this.avatarUrl,
-    required this.isPro,
     required this.onRefresh,
     required this.onOpenSettings,
   });
 
   final String username;
   final String avatarUrl;
-  final bool isPro;
   final VoidCallback onRefresh;
   final VoidCallback onOpenSettings;
 
@@ -362,26 +363,7 @@ class _HomeHeader extends StatelessWidget {
                       ),
                     ),
                   ),
-                  if (isPro) ...[
-                    const SizedBox(width: 8),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 3,
-                      ),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFFFE7B8),
-                        borderRadius: BorderRadius.circular(999),
-                      ),
-                      child: Text(
-                        'Pro',
-                        style: theme.textTheme.labelSmall?.copyWith(
-                          color: const Color(0xFF7A4E00),
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ),
-                  ],
+                  
                 ],
               ),
               const SizedBox(height: 4),
