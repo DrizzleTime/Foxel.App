@@ -1,8 +1,11 @@
+import 'dart:io';
+
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import 'package:foxel/core/models/license_info.dart';
-import 'package:foxel/core/storage/download_path_store.dart';
+import 'package:foxel/core/storage/download_dir_store.dart';
 import 'package:foxel/features/drive/pages/license_page.dart';
 
 class AccountSettingsPage extends StatefulWidget {
@@ -32,57 +35,23 @@ class AccountSettingsPage extends StatefulWidget {
 }
 
 class _AccountSettingsPageState extends State<AccountSettingsPage> {
-  final _downloadPathStore = DownloadPathStore();
-  String? _customDownloadPath;
-  String? _defaultDownloadPath;
-  bool _loadingDownloadPath = true;
+  String? _downloadDir;
 
   @override
   void initState() {
     super.initState();
-    _loadDownloadPaths();
+    _loadDownloadDir();
   }
 
-  Future<void> _loadDownloadPaths() async {
-    final store = DownloadPathStore();
-    final customPath = await store.load();
-    final defaultPath = await store.defaultDownloadPath();
+  Future<void> _loadDownloadDir() async {
+    final dir = await DownloadDirStore.currentDir();
     if (mounted) {
-      setState(() {
-        _customDownloadPath = customPath;
-        _defaultDownloadPath = defaultPath;
-        _loadingDownloadPath = false;
-      });
-    }
-  }
-
-  Future<void> _pickDownloadDirectory() async {
-    final result = await FilePicker.platform.getDirectoryPath(
-      dialogTitle: '选择下载目录',
-    );
-    if (result == null || result.isEmpty) {
-      return;
-    }
-    await _downloadPathStore.save(result);
-    if (mounted) {
-      setState(() {
-        _customDownloadPath = result;
-      });
-    }
-  }
-
-  Future<void> _resetDownloadDirectory() async {
-    await _downloadPathStore.clear();
-    if (mounted) {
-      setState(() {
-        _customDownloadPath = null;
-      });
+      setState(() => _downloadDir = dir);
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final downloadDisplayPath = _customDownloadPath ?? _defaultDownloadPath ?? '未知';
     return Scaffold(
       backgroundColor: const Color(0xFFF4F7FA),
       body: SafeArea(
@@ -107,6 +76,12 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
             _SettingsGroup(
               children: [
                 _SettingsRow(
+                  icon: Icons.download_rounded,
+                  title: '下载目录',
+                  subtitle: _downloadDir ?? '加载中',
+                  onTap: _editDownloadDir,
+                ),
+                _SettingsRow(
                   icon: Icons.verified_user_rounded,
                   title: '授权',
                   subtitle: licenseStatusText(widget.licenseInfo),
@@ -127,25 +102,136 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
                 ),
               ],
             ),
-            const SizedBox(height: 14),
-            _SettingsGroup(
-              children: [
-                _DownloadPathRow(
-                  icon: Icons.folder_rounded,
-                  title: '下载目录',
-                  subtitle: _loadingDownloadPath
-                      ? '加载中...'
-                      : downloadDisplayPath,
-                  isCustom: _customDownloadPath != null,
-                  onTap: _pickDownloadDirectory,
-                  onReset: _resetDownloadDirectory,
-                ),
-              ],
-            ),
           ],
         ),
       ),
     );
+  }
+
+  Future<void> _editDownloadDir() async {
+    final controller = TextEditingController(
+      text: _downloadDir ?? await DownloadDirStore.currentDir(),
+    );
+    final picked = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('下载目录'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: controller,
+                autofocus: true,
+                decoration: const InputDecoration(
+                  labelText: '下载目录完整路径',
+                  prefixIcon: Icon(Icons.folder_rounded),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  TextButton.icon(
+                    onPressed: () async {
+                      final selected = await FilePicker.platform
+                          .getDirectoryPath();
+                      if (selected != null) {
+                        controller.text = selected;
+                      }
+                    },
+                    icon: const Icon(Icons.folder_open_rounded),
+                    label: const Text('浏览'),
+                  ),
+                  TextButton(
+                    onPressed: () async {
+                      controller.text = await DownloadDirStore.defaultDir();
+                    },
+                    child: const Text('恢复默认'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Android 默认目录：${DownloadDirStore.androidDefaultDir}',
+                style: Theme.of(dialogContext).textTheme.bodySmall?.copyWith(
+                  color: const Color(0xFF697586),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(controller.text),
+              child: const Text('保存'),
+            ),
+          ],
+        );
+      },
+    );
+    final value = controller.text;
+    controller.dispose();
+    if (picked == null || !mounted) {
+      return;
+    }
+    if (value.trim().isEmpty) {
+      return;
+    }
+    await _applyDownloadDir(value.trim());
+  }
+
+  Future<void> _applyDownloadDir(String path) async {
+    final writable = await DownloadDirStore.isWritable(path);
+    if (!writable) {
+      if (!kIsWeb && Platform.isAndroid) {
+        final granted = await DownloadDirStore.hasAllFilesAccess();
+        if (!granted) {
+          final goSettings = await showDialog<bool>(
+            context: context,
+            builder: (dialogContext) {
+              return AlertDialog(
+                title: const Text('目录暂不可写'),
+                content: const Text(
+                  'Android 10 及以上系统需要「所有文件访问」权限才能写入该目录，'
+                  '是否前往系统设置开启？开启后请返回应用重试。',
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.of(dialogContext).pop(false),
+                    child: const Text('取消'),
+                  ),
+                  FilledButton(
+                    onPressed: () => Navigator.of(dialogContext).pop(true),
+                    child: const Text('去授权'),
+                  ),
+                ],
+              );
+            },
+          );
+          if (goSettings == true) {
+            await DownloadDirStore.requestAllFilesAccess();
+          }
+          return;
+        }
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('无法写入目录：$path')),
+        );
+      }
+      return;
+    }
+    await DownloadDirStore.setDir(path);
+    if (mounted) {
+      setState(() => _downloadDir = path);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('下载目录已更新')),
+      );
+    }
   }
 
   void _openLicensePage() {
@@ -351,52 +437,6 @@ class _SettingsRow extends StatelessWidget {
       title: Text(title, style: TextStyle(color: destructive ? color : null)),
       subtitle: Text(subtitle),
       trailing: const Icon(Icons.chevron_right_rounded),
-      onTap: onTap,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-    );
-  }
-}
-
-class _DownloadPathRow extends StatelessWidget {
-  const _DownloadPathRow({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-    required this.isCustom,
-    required this.onTap,
-    required this.onReset,
-  });
-
-  final IconData icon;
-  final String title;
-  final String subtitle;
-  final bool isCustom;
-  final VoidCallback onTap;
-  final VoidCallback onReset;
-
-  @override
-  Widget build(BuildContext context) {
-    return ListTile(
-      leading: Icon(icon, color: const Color(0xFF276EF1)),
-      title: Text(title),
-      subtitle: Text(
-        subtitle,
-        maxLines: 2,
-        overflow: TextOverflow.ellipsis,
-      ),
-      trailing: isCustom
-          ? Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(
-                  icon: const Icon(Icons.refresh_rounded, size: 20),
-                  tooltip: '恢复默认',
-                  onPressed: onReset,
-                ),
-                const Icon(Icons.chevron_right_rounded),
-              ],
-            )
-          : const Icon(Icons.chevron_right_rounded),
       onTap: onTap,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
     );

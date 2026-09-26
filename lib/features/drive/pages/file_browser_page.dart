@@ -1,11 +1,12 @@
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import 'package:foxel/core/api/foxel_api.dart';
 import 'package:foxel/core/models/file_entry.dart';
-import 'package:foxel/core/storage/download_path_store.dart';
+import 'package:foxel/core/storage/download_dir_store.dart';
 import 'package:foxel/features/drive/controllers/transfer_task_controller.dart';
 import 'package:foxel/features/media/pages/image_viewer_page.dart';
 import 'package:foxel/features/media/pages/video_player_page.dart';
@@ -255,10 +256,7 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
       return;
     }
     try {
-      final dir = await DownloadPathStore().resolveDownloadDirectory();
-      if (!await dir.exists()) {
-        await dir.create(recursive: true);
-      }
+      final dir = await DownloadDirStore.resolve();
       final output = File('${dir.path}/${entry.name}');
       widget.taskController.startDownload(
         api: widget.api,
@@ -268,9 +266,40 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
       );
       widget.onOpenTasks();
     } catch (error) {
-      if (mounted) {
-        _showMessage(error.toString());
+      if (!mounted) {
+        return;
       }
+      if (!kIsWeb &&
+          Platform.isAndroid &&
+          !await DownloadDirStore.hasAllFilesAccess()) {
+        final goSettings = await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) {
+            return AlertDialog(
+              title: const Text('无法写入下载目录'),
+              content: const Text(
+                'Android 10 及以上系统需要「所有文件访问」权限才能写入公共下载目录，'
+                '是否前往系统设置开启？开启后返回应用重新下载即可。',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(false),
+                  child: const Text('取消'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(true),
+                  child: const Text('去授权'),
+                ),
+              ],
+            );
+          },
+        );
+        if (goSettings == true) {
+          await DownloadDirStore.requestAllFilesAccess();
+        }
+        return;
+      }
+      _showMessage('无法写入下载目录：$error');
     }
   }
 
