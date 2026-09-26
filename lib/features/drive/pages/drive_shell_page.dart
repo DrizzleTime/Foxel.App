@@ -7,7 +7,6 @@ import 'package:foxel/core/api/foxel_api.dart';
 import 'package:foxel/features/drive/controllers/transfer_task_controller.dart';
 import 'package:foxel/features/drive/pages/account_settings_page.dart';
 import 'package:foxel/features/drive/pages/file_browser_page.dart';
-import 'package:foxel/features/drive/pages/home_page.dart';
 import 'package:foxel/features/drive/pages/transfer_tasks_page.dart';
 
 class DriveShellPage extends StatefulWidget {
@@ -38,7 +37,7 @@ class _DriveShellPageState extends State<DriveShellPage> {
   int _currentIndex = 0;
   int _previousIndex = 0;
   final Set<int> _visitedIndexes = {0};
-  final List<Widget?> _tabs = List<Widget?>.filled(4, null);
+  final List<Widget?> _tabs = List<Widget?>.filled(3, null);
   final TransferTaskController _taskController = TransferTaskController();
 
   @override
@@ -85,21 +84,12 @@ class _DriveShellPageState extends State<DriveShellPage> {
 
   Widget _buildTab(int index) {
     return switch (index) {
-      0 => HomePage(
-        api: widget.api,
-        username: widget.username,
-        avatarUrl: widget.avatarUrl,
-        onOpenFiles: () => _selectIndex(1),
-        taskController: _taskController,
-        onOpenTasks: () => _selectIndex(2),
-        onOpenSettings: () => _selectIndex(3),
-      ),
-      1 => FileBrowserPage(
+      0 => FileBrowserPage(
         api: widget.api,
         taskController: _taskController,
-        onOpenTasks: () => _selectIndex(2),
+        onOpenTasks: () => _selectIndex(1),
       ),
-      2 => TransferTasksPage(controller: _taskController),
+      1 => TransferTasksPage(controller: _taskController),
       _ => AccountSettingsPage(
         username: widget.username,
         email: widget.email,
@@ -213,11 +203,6 @@ class _FloatingBottomNav extends StatelessWidget {
   final ValueChanged<int> onSelected;
 
   static const _items = [
-    _NavItem(
-      label: '首页',
-      icon: CupertinoIcons.house,
-      selectedIcon: CupertinoIcons.house_fill,
-    ),
     _NavItem(
       label: '文件',
       icon: CupertinoIcons.folder,
