@@ -1,33 +1,37 @@
-name: Build
+name: Build All Platforms
 
 on:
-  workflow_dispatch:
   push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
+    branches: [ main, master ]
+  workflow_dispatch:
 
 jobs:
   build-android:
     name: Android APK
-    runs-on: ubuntu-24.04
-
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
+          flutter-version: '3.47.5'
           channel: stable
           cache: true
 
-      - name: Install dependencies
+      - name: Get dependencies
         run: flutter pub get
 
-      - name: Set up Android signing
+      # 可选签名：若在仓库 Settings → Secrets 配置了以下 4 个变量则用正式签名，
+      # 否则自动回退为 debug 签名（APK 仍可直接安装）
+      - name: Set up Android signing (optional)
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -35,18 +39,9 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
-            if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
-              echo "ANDROID_KEYSTORE_BASE64 is not set. Pull request APK will use debug signing."
-              exit 0
-            fi
-            echo "ANDROID_KEYSTORE_BASE64 is not set."
-            exit 1
+            echo "No signing secrets found, using debug signing."
+            exit 0
           fi
-          if [ -z "$ANDROID_KEYSTORE_PASSWORD" ] || [ -z "$ANDROID_KEY_ALIAS" ] || [ -z "$ANDROID_KEY_PASSWORD" ]; then
-            echo "Android signing secrets are incomplete."
-            exit 1
-          fi
-
           echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > android/foxel-release.jks
           {
             printf 'storeFile=foxel-release.jks\n'
@@ -58,8 +53,8 @@ jobs:
       - name: Build ABI split APKs
         run: bash scripts/build_android_split_apk.sh
 
-      - name: Upload ABI split APKs
-        uses: actions/upload-artifact@v7
+      - name: Upload APKs
+        uses: actions/upload-artifact@v4
         with:
           name: foxel-android-split-apks
           path: |
@@ -70,11 +65,10 @@ jobs:
 
   build-linux:
     name: Linux App
-    runs-on: ubuntu-24.04
-
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Install Linux deps
         run: |
@@ -84,17 +78,18 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
+          flutter-version: '3.47.5'
           channel: stable
           cache: true
 
-      - name: Install dependencies
+      - name: Get dependencies
         run: flutter pub get
 
       - name: Build Linux
         run: flutter build linux --release
 
       - name: Upload Linux bundle
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: foxel-linux-bundle
           path: build/linux/x64/release/bundle
@@ -102,26 +97,26 @@ jobs:
 
   build-windows:
     name: Windows App
-    runs-on: windows-2022
-
+    runs-on: windows-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
+          flutter-version: '3.47.5'
           channel: stable
           cache: true
 
-      - name: Install dependencies
+      - name: Get dependencies
         run: flutter pub get
 
       - name: Build Windows
         run: flutter build windows --release
 
       - name: Upload Windows bundle
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: foxel-windows-bundle
           path: build/windows/x64/runner/Release
@@ -129,26 +124,26 @@ jobs:
 
   build-macos:
     name: macOS App
-    runs-on: macos-14
-
+    runs-on: macos-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
+          flutter-version: '3.47.5'
           channel: stable
           cache: true
 
-      - name: Install dependencies
+      - name: Get dependencies
         run: flutter pub get
 
       - name: Build macOS
         run: flutter build macos --release
 
       - name: Upload macOS bundle
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: foxel-macos-bundle
           path: build/macos/Build/Products/Release/Foxel.app
@@ -156,25 +151,22 @@ jobs:
 
   build-ios:
     name: iOS App (unsigned)
-    runs-on: macos-15
-
+    runs-on: macos-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_16.4.app
+        uses: actions/checkout@v4
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
+          flutter-version: '3.47.5'
           channel: stable
           cache: true
 
-      - name: Install dependencies
+      - name: Get dependencies
         run: flutter pub get
 
-      - name: Build iOS
+      - name: Build iOS (no codesign)
         run: flutter build ios --release --no-codesign
 
       - name: Package unsigned IPA
@@ -185,7 +177,7 @@ jobs:
           zip -r foxel-ios-unsigned.ipa Payload
 
       - name: Upload unsigned IPA
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: foxel-ios-unsigned-ipa
           path: build/ios/ipa/foxel-ios-unsigned.ipa

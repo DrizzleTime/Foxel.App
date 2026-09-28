@@ -1,7 +1,10 @@
+import 'dart:io';
+
+import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
-import 'package:foxel/core/models/license_info.dart';
-import 'package:foxel/features/drive/pages/license_page.dart';
+import 'package:foxel/core/storage/download_dir_store.dart';
 
 class AccountSettingsPage extends StatefulWidget {
   const AccountSettingsPage({
@@ -10,8 +13,6 @@ class AccountSettingsPage extends StatefulWidget {
     required this.email,
     required this.avatarUrl,
     required this.baseUrl,
-    required this.licenseInfo,
-    required this.onVerifyLicense,
     required this.onSwitchServer,
     required this.onLogout,
   });
@@ -20,8 +21,6 @@ class AccountSettingsPage extends StatefulWidget {
   final String email;
   final String avatarUrl;
   final String baseUrl;
-  final LicenseInfo? licenseInfo;
-  final Future<LicenseInfo> Function(String licenseKey) onVerifyLicense;
   final VoidCallback onSwitchServer;
   final VoidCallback onLogout;
 
@@ -30,6 +29,21 @@ class AccountSettingsPage extends StatefulWidget {
 }
 
 class _AccountSettingsPageState extends State<AccountSettingsPage> {
+  String? _downloadDir;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadDownloadDir();
+  }
+
+  Future<void> _loadDownloadDir() async {
+    final dir = await DownloadDirStore.currentDir();
+    if (mounted) {
+      setState(() => _downloadDir = dir);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -56,10 +70,10 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
             _SettingsGroup(
               children: [
                 _SettingsRow(
-                  icon: Icons.verified_user_rounded,
-                  title: '授权',
-                  subtitle: licenseStatusText(widget.licenseInfo),
-                  onTap: _openLicensePage,
+                  icon: Icons.download_rounded,
+                  title: '下载目录',
+                  subtitle: _downloadDir ?? '加载中',
+                  onTap: _editDownloadDir,
                 ),
                 _SettingsRow(
                   icon: Icons.sync_alt_rounded,
@@ -82,16 +96,130 @@ class _AccountSettingsPageState extends State<AccountSettingsPage> {
     );
   }
 
-  void _openLicensePage() {
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => FoxelLicensePage(
-          baseUrl: widget.baseUrl,
-          licenseInfo: widget.licenseInfo,
-          onVerifyLicense: widget.onVerifyLicense,
-        ),
-      ),
+  Future<void> _editDownloadDir() async {
+    final controller = TextEditingController(
+      text: _downloadDir ?? await DownloadDirStore.currentDir(),
     );
+    final picked = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('下载目录'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: controller,
+                autofocus: true,
+                decoration: const InputDecoration(
+                  labelText: '下载目录完整路径',
+                  prefixIcon: Icon(Icons.folder_rounded),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  TextButton.icon(
+                    onPressed: () async {
+                      final selected = await FilePicker.platform
+                          .getDirectoryPath();
+                      if (selected != null) {
+                        controller.text = selected;
+                      }
+                    },
+                    icon: const Icon(Icons.folder_open_rounded),
+                    label: const Text('浏览'),
+                  ),
+                  TextButton(
+                    onPressed: () async {
+                      controller.text = await DownloadDirStore.defaultDir();
+                    },
+                    child: const Text('恢复默认'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Android 默认目录：${DownloadDirStore.androidDefaultDir}',
+                style: Theme.of(dialogContext).textTheme.bodySmall?.copyWith(
+                  color: const Color(0xFF697586),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(controller.text),
+              child: const Text('保存'),
+            ),
+          ],
+        );
+      },
+    );
+    final value = controller.text;
+    controller.dispose();
+    if (picked == null || !mounted) {
+      return;
+    }
+    if (value.trim().isEmpty) {
+      return;
+    }
+    await _applyDownloadDir(value.trim());
+  }
+
+  Future<void> _applyDownloadDir(String path) async {
+    final writable = await DownloadDirStore.isWritable(path);
+    if (!writable) {
+      if (!kIsWeb && Platform.isAndroid) {
+        final granted = await DownloadDirStore.hasAllFilesAccess();
+        if (!granted) {
+          final goSettings = await showDialog<bool>(
+            context: context,
+            builder: (dialogContext) {
+              return AlertDialog(
+                title: const Text('目录暂不可写'),
+                content: const Text(
+                  'Android 10 及以上系统需要「所有文件访问」权限才能写入该目录，'
+                  '是否前往系统设置开启？开启后请返回应用重试。',
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.of(dialogContext).pop(false),
+                    child: const Text('取消'),
+                  ),
+                  FilledButton(
+                    onPressed: () => Navigator.of(dialogContext).pop(true),
+                    child: const Text('去授权'),
+                  ),
+                ],
+              );
+            },
+          );
+          if (goSettings == true) {
+            await DownloadDirStore.requestAllFilesAccess();
+          }
+          return;
+        }
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('无法写入目录：$path')),
+        );
+      }
+      return;
+    }
+    await DownloadDirStore.setDir(path);
+    if (mounted) {
+      setState(() => _downloadDir = path);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('下载目录已更新')),
+      );
+    }
   }
 
   Future<void> _confirmLogout(BuildContext context) async {

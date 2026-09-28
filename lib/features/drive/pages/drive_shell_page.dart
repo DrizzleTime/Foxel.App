@@ -4,11 +4,9 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import 'package:foxel/core/api/foxel_api.dart';
-import 'package:foxel/core/models/license_info.dart';
 import 'package:foxel/features/drive/controllers/transfer_task_controller.dart';
 import 'package:foxel/features/drive/pages/account_settings_page.dart';
 import 'package:foxel/features/drive/pages/file_browser_page.dart';
-import 'package:foxel/features/drive/pages/home_page.dart';
 import 'package:foxel/features/drive/pages/transfer_tasks_page.dart';
 
 class DriveShellPage extends StatefulWidget {
@@ -19,8 +17,6 @@ class DriveShellPage extends StatefulWidget {
     required this.email,
     required this.avatarUrl,
     required this.baseUrl,
-    required this.licenseInfo,
-    required this.onVerifyLicense,
     required this.onOpenSettings,
     required this.onLogout,
   });
@@ -30,8 +26,6 @@ class DriveShellPage extends StatefulWidget {
   final String email;
   final String avatarUrl;
   final String baseUrl;
-  final LicenseInfo? licenseInfo;
-  final Future<LicenseInfo> Function(String licenseKey) onVerifyLicense;
   final VoidCallback onOpenSettings;
   final VoidCallback onLogout;
 
@@ -43,7 +37,7 @@ class _DriveShellPageState extends State<DriveShellPage> {
   int _currentIndex = 0;
   int _previousIndex = 0;
   final Set<int> _visitedIndexes = {0};
-  final List<Widget?> _tabs = List<Widget?>.filled(4, null);
+  final List<Widget?> _tabs = List<Widget?>.filled(3, null);
   final TransferTaskController _taskController = TransferTaskController();
 
   @override
@@ -59,8 +53,7 @@ class _DriveShellPageState extends State<DriveShellPage> {
         oldWidget.username != widget.username ||
         oldWidget.email != widget.email ||
         oldWidget.avatarUrl != widget.avatarUrl ||
-        oldWidget.baseUrl != widget.baseUrl ||
-        oldWidget.licenseInfo != widget.licenseInfo) {
+        oldWidget.baseUrl != widget.baseUrl) {
       for (var index = 0; index < _tabs.length; index++) {
         _tabs[index] = null;
       }
@@ -91,30 +84,17 @@ class _DriveShellPageState extends State<DriveShellPage> {
 
   Widget _buildTab(int index) {
     return switch (index) {
-      0 => HomePage(
+      0 => FileBrowserPage(
         api: widget.api,
-        username: widget.username,
-        avatarUrl: widget.avatarUrl,
-        isPro: widget.licenseInfo?.isPro ?? false,
-        onOpenFiles: () => _selectIndex(1),
         taskController: _taskController,
-        onOpenTasks: () => _selectIndex(2),
-        onOpenSettings: () => _selectIndex(3),
+        onOpenTasks: () => _selectIndex(1),
       ),
-      1 => FileBrowserPage(
-        api: widget.api,
-        canPlayVideo: widget.licenseInfo?.isPro ?? false,
-        taskController: _taskController,
-        onOpenTasks: () => _selectIndex(2),
-      ),
-      2 => TransferTasksPage(controller: _taskController),
+      1 => TransferTasksPage(controller: _taskController),
       _ => AccountSettingsPage(
         username: widget.username,
         email: widget.email,
         avatarUrl: widget.avatarUrl,
         baseUrl: widget.baseUrl,
-        licenseInfo: widget.licenseInfo,
-        onVerifyLicense: widget.onVerifyLicense,
         onSwitchServer: widget.onOpenSettings,
         onLogout: widget.onLogout,
       ),
@@ -223,11 +203,6 @@ class _FloatingBottomNav extends StatelessWidget {
   final ValueChanged<int> onSelected;
 
   static const _items = [
-    _NavItem(
-      label: '首页',
-      icon: CupertinoIcons.house,
-      selectedIcon: CupertinoIcons.house_fill,
-    ),
     _NavItem(
       label: '文件',
       icon: CupertinoIcons.folder,
