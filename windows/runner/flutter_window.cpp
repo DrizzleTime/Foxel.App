@@ -6,51 +6,10 @@
 #include <string>
 
 #include "app_messages.h"
+#include "app_paths.h"
 #include "flutter/generated_plugin_registrant.h"
 
 namespace {
-
-// 便携版用户数据目录：<exe 所在目录>\userdata，不存在时创建（已存在会失败，忽略）。
-// 返回空串表示拿不到 exe 路径，调用方按"默认行为"处理。
-std::wstring UserDataDirectory() {
-  wchar_t exe_path[MAX_PATH] = {};
-  const DWORD length =
-      ::GetModuleFileNameW(nullptr, exe_path, static_cast<DWORD>(MAX_PATH));
-  if (length == 0 || length >= static_cast<DWORD>(MAX_PATH)) {
-    return std::wstring();
-  }
-
-  std::wstring directory(exe_path, length);
-  const size_t separator = directory.find_last_of(L"\\/");
-  if (separator == std::wstring::npos) {
-    return std::wstring();
-  }
-  directory.erase(separator);
-  directory += L"\\userdata";
-  ::CreateDirectoryW(directory.c_str(), nullptr);
-  return directory;
-}
-
-// 首次启动提示只需出现一次：在 userdata 下留一个标记文件。
-// 沿用便携版语义 —— 删掉程序目录即恢复"首次启动"。
-// 注意：它只决定"是否弹一次托盘说明"，不参与"是否显示主窗口"的决策。
-bool ShouldShowFirstRunHint() {
-  const std::wstring directory = UserDataDirectory();
-  if (directory.empty()) {
-    return false;
-  }
-
-  const std::wstring marker = directory + L"\\.tray-hint-shown";
-  // CREATE_NEW：只有第一次能创建成功，之后必然失败。
-  HANDLE file = ::CreateFileW(marker.c_str(), GENERIC_WRITE, 0, nullptr,
-                              CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
-  if (file == INVALID_HANDLE_VALUE) {
-    // 已存在 → 不是首次；其他错误（只读目录等）→ 宁可不提示，避免每次启动都弹。
-    return false;
-  }
-  ::CloseHandle(file);
-  return true;
-}
 
 // 设置页「启动时最小化到托盘」：标记文件存在即开启，内容不参与判定。
 // 文件名与 Dart 端 DesktopWindowStore 共用，改一处必须同步另一处。
@@ -116,14 +75,9 @@ bool FlutterWindow::OnCreate() {
   // 隐藏路径靠它先把首帧画好，从托盘恢复时不必再等引擎出帧。
   flutter_controller_->ForceRedraw();
 
-  // 托盘常驻的行为不是所有用户都能猜到，首次运行时提示一次。
-  if (ShouldShowFirstRunHint()) {
-    tray_.ShowBalloon(
-        L"Foxel",
-        start_minimized
-            ? L"已在系统托盘运行，右键托盘图标可打开主窗口或退出。"
-            : L"关闭主窗口后程序仍驻留在系统托盘，右键托盘图标可重新打开或退出。");
-  }
+  // 首次运行托盘气泡已移除：它依赖 exe 目录可写（标记文件），放到 Program Files
+  // 这类只读位置就永久失效；而窗口每次启动都显示、托盘图标随时可见，
+  // 这条提示不值得再留一条会静默失效的代码路径。行为说明见 README。
 
   return true;
 }

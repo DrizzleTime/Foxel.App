@@ -42,9 +42,6 @@ class TrayIcon {
   // 判断是否为「任务栏已重建」的广播消息。
   bool IsTaskbarCreatedMessage(UINT message) const;
 
-  // 首次启动提示气泡。
-  bool ShowBalloon(const std::wstring& title, const std::wstring& text);
-
  private:
   void FillData(NOTIFYICONDATAW* data) const;
   bool AddIcon();

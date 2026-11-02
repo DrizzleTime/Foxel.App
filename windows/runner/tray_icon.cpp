@@ -187,19 +187,3 @@ void TrayIcon::ReAdd() {
 bool TrayIcon::IsTaskbarCreatedMessage(UINT message) const {
   return taskbar_created_message_ != 0 && message == taskbar_created_message_;
 }
-
-bool TrayIcon::ShowBalloon(const std::wstring& title,
-                           const std::wstring& text) {
-  if (!added_ || owner_ == nullptr) {
-    return false;
-  }
-
-  NOTIFYICONDATAW data;
-  FillData(&data);
-  data.uFlags = NIF_INFO;
-  data.dwInfoFlags = NIIF_INFO;
-  CopyWide(data.szInfoTitle,
-           static_cast<int>(ARRAYSIZE(data.szInfoTitle)), title);
-  CopyWide(data.szInfo, static_cast<int>(ARRAYSIZE(data.szInfo)), text);
-  return ::Shell_NotifyIconW(NIM_MODIFY, &data) != FALSE;
-}
