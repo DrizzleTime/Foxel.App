@@ -90,7 +90,7 @@ Foxel 是 Foxel 服务端的跨平台客户端，用于浏览、上传、下载�
 ### 2.6 平台特性
 
 - **Windows 便携版**：偏好数据写在 `<程序目录>/userdata/prefs.json`，删除程序目录即清空数据，不污染系统 AppData；写入走串行队列 + 临时文件 rename 的原子写，读取失败时禁止回写以避免覆盖
-- **Windows 托盘常驻**：启动即托盘模式（不弹主窗口）、关闭主界面只收进托盘、仅托盘菜单「退出」真正结束进程、左键双击显示主窗口、explorer 重启自动重挂图标、单实例（重复启动只唤起已有窗口）
+- **Windows 托盘常驻**：启动即显示主窗口并同时挂上托盘图标（设置页可改为「启动时最小化到托盘」）、关闭主界面只收进托盘、仅托盘菜单「退出」真正结束进程、左键双击显示主窗口、explorer 重启自动重挂图标、单实例（重复启动只唤起已有窗口）
 - **Android**：默认下载目录 `/storage/emulated/0/Download/Foxel`
 - **桌面端适配**：宽屏下内容宽度收敛居中（`ContentFrame`），与移动端版式一致
 
@@ -179,7 +179,7 @@ flutter build ios --release --no-codesign     # iOS（未签名）
 
 **安装说明**
 
-- **Windows**：解压 ZIP 后运行 `Foxel.exe`（便携版，数据在同目录 `userdata/`）。程序以托盘常驻方式启动，首次使用需从通知区域的 Foxel 图标进入
+- **Windows**：解压 ZIP 后运行 `Foxel.exe`（便携版，数据在同目录 `userdata/`）。启动即显示主窗口，同时常驻系统托盘；关闭窗口只是收进托盘，需要从托盘菜单「退出」才会真正结束进程
 - **macOS**：解压 ZIP 后拖入「应用程序」；首次打开可能需在「系统设置 › 隐私与安全性」中允许
 - **Linux**：解压 TAR.GZ 后运行 `Foxel`
 - **Android**：安装对应架构 APK，多数现代设备选 `arm64-v8a`
@@ -205,6 +205,7 @@ Foxel.App/
 │  │  │  ├─ account_store.dart          # 账户索引与沙箱读写（串行队列 + 一次性迁移）
 │  │  │  ├─ download_dir_store.dart     # 账户级下载目录、可写探测、Android 权限引导
 │  │  │  ├─ browse_state_store.dart     # 浏览位置 / 排序 / 视图模式
+│  │  │  ├─ desktop_window_store.dart    # 「启动时最小化到托盘」开关（与 runner 共用标记文件）
 │  │  │  └─ portable_prefs_store.dart   # Windows 便携版 JSON 存储（原子写 + 写队列）
 │  │  ├─ theme/design_tokens.dart       # 设计令牌唯一来源（颜色 / 圆角 / 间距 / 字号）
 │  │  ├─ widgets/content_frame.dart     # 桌面端宽度收敛容器
@@ -219,7 +220,7 @@ Foxel.App/
 │     │  ├─ controllers/transfer_task_controller.dart   # 上传/下载任务队列与中断语义
 │     │  └─ services/rename_rules.dart                  # 批量重命名规则与冲突检测（纯逻辑）
 │     ├─ media/                 # video_player_page、image_viewer_page、播放进度存储
-│     └─ settings/              # 设置页：下载目录、存储用量、清除本地数据、账户管理入口
+│     └─ settings/              # 设置页：下载目录、存储用量、启动形态开关、清除本地数据、账户管理入口
 ├─ test/                        # rename_rules_test / account_center_test / widget_test
 ├─ android/ ios/ macos/ linux/ windows/ web/   # 各平台工程（windows/runner 含托盘实现 tray_icon.*）
 ├─ scripts/build_android_split_apk.sh          # Android 分架构 APK 构建脚本
@@ -274,6 +275,8 @@ App 内：**添加账户 → 扫码添加**，用后置 / 外接摄像头对准�
 | 其他平台 | `<系统下载目录>/Foxel/<显示名称 或 账户ID>` |
 
 在 **设置 → 下载目录** 中可手动输入路径、点「浏览...」选择系统目录、或「恢复默认」。保存前会做可写探测；Android 10+ 写公共目录时若未获「所有文件访问」权限，会引导前往系统设置授权。
+
+Windows 另有 **设置 → 启动时最小化到托盘** 开关：关闭（默认）时启动即显示主窗口并常驻托盘，开启后启动只留托盘图标、主窗口由托盘菜单唤起。开关状态记在 `<程序目录>/userdata/.start-minimized`（文件存在即开启），改动只影响下一次启动。
 
 ### 6.5 批量重命名一组照片
 
@@ -330,7 +333,7 @@ App 内：**添加账户 → 扫码添加**，用后置 / 外接摄像头对准�
 - **上传为单选**：一次只能上传一个文件（`pickFiles` 未开启多选）
 - **扫码入口复用登录页**，尚未做成独立页面
 - **「清除本地数据」不删除已下载到磁盘的文件**（避免误删用户资料）
-- **Windows**：启动后不显示主窗口，需从托盘图标进入；托盘图标可能被系统收纳进通知区域溢出区
+- **Windows**：关闭主窗口后进程仍在系统托盘运行，需从托盘菜单「退出」才真正结束；托盘图标可能被系统收纳进通知区域溢出区
 - **Android 10+**：写入公共目录需要「所有文件访问」权限，未授权时该目录不可写
 - **iOS / macOS**：仓库未提交 `Podfile`，首次构建需在本工程执行 `flutter build ios/macos` 由 Flutter 生成或手工 `pod install`
 - 网络图片缓存尚未按账户分区；账户级密码 / 生物识别锁未实现

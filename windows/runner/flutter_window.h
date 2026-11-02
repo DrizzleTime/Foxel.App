@@ -11,7 +11,8 @@
 
 // A window that does nothing but host a Flutter view.
 //
-// 桌面上以"托盘常驻"形态运行：启动后窗口不显示，关闭只隐藏，
+// 桌面上以"窗口 + 托盘常驻"形态运行：启动即显示主窗口并挂上托盘图标，
+// 关闭窗口只隐藏、进程与 Flutter 引擎继续运行，
 // 唯一真正的退出路径是托盘菜单的「退出」。
 class FlutterWindow : public Win32Window {
  public:

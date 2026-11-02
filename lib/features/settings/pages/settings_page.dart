@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import 'package:foxel/core/models/account.dart';
+import 'package:foxel/core/storage/desktop_window_store.dart';
 import 'package:foxel/core/storage/download_dir_store.dart';
 import 'package:foxel/core/theme/design_tokens.dart';
 import 'package:foxel/core/widgets/content_frame.dart';
@@ -38,12 +39,14 @@ class SettingsPage extends StatefulWidget {
 class _SettingsPageState extends State<SettingsPage> {
   String? _downloadDir;
   int? _usageBytes;
+  bool _startMinimized = false;
 
   @override
   void initState() {
     super.initState();
     _loadDownloadDir();
     _loadUsage();
+    _loadStartMinimized();
   }
 
   @override
@@ -78,6 +81,25 @@ class _SettingsPageState extends State<SettingsPage> {
       return;
     }
     setState(() => _usageBytes = bytes);
+  }
+
+  Future<void> _loadStartMinimized() async {
+    final enabled = await DesktopWindowStore.startMinimized();
+    if (!mounted) {
+      return;
+    }
+    setState(() => _startMinimized = enabled);
+  }
+
+  /// 开关立即落盘，但只影响**下一次**启动：当前进程的窗口已经创建，
+  /// 不在这里做隐藏动作，避免用户拨一下开关窗口就消失。
+  Future<void> _setStartMinimized(bool value) async {
+    setState(() => _startMinimized = value);
+    await DesktopWindowStore.setStartMinimized(value);
+    if (!mounted) {
+      return;
+    }
+    _showMessage(value ? '下次启动将只驻留系统托盘' : '下次启动将直接显示主窗口');
   }
 
   String get _usageLabel {
@@ -147,6 +169,17 @@ class _SettingsPageState extends State<SettingsPage> {
                   subtitle: _usageLabel,
                   onTap: _loadUsage,
                 ),
+                // 托盘常驻只有 Windows runner 实现，其他平台不展示这个开关。
+                if (DesktopWindowStore.isSupported)
+                  _SettingsSwitchRow(
+                    icon: Icons.minimize_rounded,
+                    title: '启动时最小化到托盘',
+                    subtitle: _startMinimized
+                        ? '启动后只显示托盘图标，不弹出主窗口'
+                        : '启动时显示主窗口，同时常驻托盘',
+                    value: _startMinimized,
+                    onChanged: _setStartMinimized,
+                  ),
                 const _SettingsRow(
                   icon: Icons.info_outline_rounded,
                   title: '关于 Foxel',
@@ -518,6 +551,45 @@ class _SettingsRow extends StatelessWidget {
           ? null
           : Icon(Icons.chevron_right_rounded, size: 20, color: AppColors.ink3),
       onTap: onTap,
+    );
+  }
+}
+
+/// 带开关的设置行：版式与 [_SettingsRow] 对齐，尾部换成 [Switch]。
+///
+/// 整行可点（与开关同效），避免用户只有精确点到 48dp 的开关才能切换。
+class _SettingsSwitchRow extends StatelessWidget {
+  const _SettingsSwitchRow({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      contentPadding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.lg,
+        vertical: 2,
+      ),
+      leading: Icon(icon, size: 20, color: AppColors.ink2),
+      title: Text(title, style: AppText.itemTitle),
+      subtitle: Text(
+        subtitle,
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+        style: AppText.itemHint,
+      ),
+      trailing: Switch(value: value, onChanged: onChanged),
+      onTap: () => onChanged(!value),
     );
   }
 }
