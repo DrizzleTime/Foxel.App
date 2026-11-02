@@ -2,7 +2,9 @@
 #define RUNNER_FLUTTER_WINDOW_H_
 
 #include <flutter/dart_project.h>
+#include <flutter/encodable_value.h>
 #include <flutter/flutter_view_controller.h>
+#include <flutter/method_channel.h>
 
 #include <memory>
 
@@ -51,6 +53,14 @@ class FlutterWindow : public Win32Window {
   // 挂载失败时程序没有任何「显示/退出」入口，因此 WM_CLOSE 必须退化为真退出，
   // 否则窗口一关就只剩一个点不到的进程，只能靠任务管理器结束。
   bool tray_available_ = true;
+
+  // token 加解密通道（DPAPI，绑定当前 Windows 用户）。
+  // Dart 侧 `foxel/secret` 通道的对应实现，见 RegisterSecretChannel。
+  std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
+      secret_channel_;
+
+  // 注册 foxel/secret 方法通道；引擎不可用时什么也不做。
+  void RegisterSecretChannel();
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_

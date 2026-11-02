@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:foxel/core/models/account.dart';
+import 'package:foxel/core/storage/token_protector.dart';
 
 /// 多账户存储。
 ///
@@ -119,11 +120,13 @@ class AccountStore {
             if (id is! String || id.isEmpty) {
               continue;
             }
+            // token 可能是 DPAPI 密文（Windows），也可能是旧版明文。
+            // 解不开（换 Windows 用户 / 换机器）时按空 token 处理：
+            // 账户记录仍然保留，界面上会落到「需重新验证」。
+            final stored = prefs.getString(tokenKey(id)) ?? '';
+            final token = await TokenProtector.unprotect(stored);
             accounts.add(
-              Account.fromJson(
-                item,
-                token: prefs.getString(tokenKey(id)) ?? '',
-              ),
+              Account.fromJson(item, token: token ?? ''),
             );
           } catch (_) {
             continue;
@@ -251,7 +254,11 @@ class AccountStore {
       account,
     ];
     await prefs.setString(_indexKey, jsonEncode(next.map(_toIndex).toList()));
-    await prefs.setString(tokenKey(account.id), account.token);
+    // 写入即加密：旧版明文 token 会在下一次 upsert 时自动升级成密文。
+    await prefs.setString(
+      tokenKey(account.id),
+      await TokenProtector.protect(account.token),
+    );
   }
 
   Map<String, dynamic> _toIndex(Account account) {
@@ -266,7 +273,10 @@ class AccountStore {
   /// 这里的写入又会把 token 补回去，留下一个账户已删但 token 还在的残骸。
   Future<void> updateToken(String id, String token) => _serialized(() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(tokenKey(id), token);
+    await prefs.setString(
+      tokenKey(id),
+      await TokenProtector.protect(token),
+    );
   });
 
   /// 记录「最后使用时间」。

@@ -43,6 +43,9 @@ target_link_libraries(${BINARY_NAME} PRIVATE flutter flutter_wrapper_app)
 target_link_libraries(${BINARY_NAME} PRIVATE "dwmapi.lib")
 # Shell_NotifyIcon / NOTIFYICONDATA 来自 shell32。
 target_link_libraries(${BINARY_NAME} PRIVATE "shell32.lib")
+# CryptProtectData / CryptUnprotectData / CryptBinaryToString 来自 crypt32。
+# 用于把账户 token 用当前 Windows 用户密钥加密后再落盘。
+target_link_libraries(${BINARY_NAME} PRIVATE "crypt32.lib")
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 
 # Run the Flutter tool portions of the build. This must not be removed.

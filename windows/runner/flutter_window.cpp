@@ -1,15 +1,94 @@
 #include "flutter_window.h"
 
 #include <windows.h>
+// DPAPI：必须在 windows.h 之后包含。
+#include <dpapi.h>
 
 #include <optional>
 #include <string>
+
+#include <flutter/standard_method_codec.h>
 
 #include "app_messages.h"
 #include "app_paths.h"
 #include "flutter/generated_plugin_registrant.h"
 
 namespace {
+
+// 用当前 Windows 用户的 DPAPI 密钥加密一段 UTF-8 文本，输出 base64。
+//
+// 目的：token 落到 userdata/prefs.json 时不再是明文 —— 拷走整个程序目录、
+// 或者把目录同步到网盘，别人拿到也解不开（密文绑定当前用户账户）。
+// 代价：换机器 / 换 Windows 用户后需要重新登录，这是安全换来的。
+bool ProtectText(const std::string& plain, std::string* encoded) {
+  DATA_BLOB input{};
+  input.pbData = reinterpret_cast<BYTE*>(const_cast<char*>(plain.data()));
+  input.cbData = static_cast<DWORD>(plain.size());
+
+  DATA_BLOB output{};
+  if (!::CryptProtectData(&input, L"Foxel account token", nullptr, nullptr,
+                          nullptr, CRYPTPROTECT_UI_FORBIDDEN, &output)) {
+    return false;
+  }
+
+  DWORD size = 0;
+  BOOL ok = ::CryptBinaryToStringA(
+      output.pbData, output.cbData,
+      CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, nullptr, &size);
+  std::string base64;
+  if (ok && size > 0) {
+    base64.assign(size, '\0');
+    ok = ::CryptBinaryToStringA(output.pbData, output.cbData,
+                               CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF,
+                               base64.data(), &size);
+    if (ok) {
+      // 返回的长度包含结尾 '\0'，去掉它才能还原成原始 base64。
+      base64.resize(size > 0 ? size - 1 : 0);
+    }
+  }
+  ::LocalFree(output.pbData);
+
+  if (!ok) {
+    return false;
+  }
+  *encoded = std::move(base64);
+  return true;
+}
+
+// ProtectText 的逆操作。解不开（换用户 / 换机器 / 数据被改）时返回 false。
+bool UnprotectText(const std::string& encoded, std::string* plain) {
+  DWORD size = 0;
+  if (!::CryptStringToBinaryA(encoded.c_str(), 0, CRYPT_STRING_BASE64, nullptr,
+                              &size, nullptr, nullptr) ||
+      size == 0) {
+    return false;
+  }
+
+  std::string binary(size, '\0');
+  if (!::CryptStringToBinaryA(
+          encoded.c_str(), 0, CRYPT_STRING_BASE64,
+          reinterpret_cast<BYTE*>(binary.data()), &size, nullptr, nullptr)) {
+    return false;
+  }
+  binary.resize(size);
+
+  DATA_BLOB input{};
+  input.pbData = reinterpret_cast<BYTE*>(binary.data());
+  input.cbData = static_cast<DWORD>(binary.size());
+
+  DATA_BLOB output{};
+  if (!::CryptUnprotectData(&input, nullptr, nullptr, nullptr, nullptr,
+                            CRYPTPROTECT_UI_FORBIDDEN, &output)) {
+    return false;
+  }
+
+  std::string text(reinterpret_cast<const char*>(output.pbData),
+                   static_cast<size_t>(output.cbData));
+  ::LocalFree(output.pbData);
+  *plain = std::move(text);
+  return true;
+}
+
 
 // 设置页「启动时最小化到托盘」：标记文件存在即开启，内容不参与判定。
 // 文件名与 Dart 端 DesktopWindowStore 共用，改一处必须同步另一处。
@@ -46,6 +125,9 @@ bool FlutterWindow::OnCreate() {
   }
   RegisterPlugins(flutter_controller_->engine());
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
+
+  // token 加密通道：Dart 侧 AccountStore 通过它做 DPAPI 加解密。
+  RegisterSecretChannel();
 
   tray_.SetHandlers([this]() { ShowMainWindow(); }, [this]() { QuitApp(); });
   if (!tray_.Create(GetHandle(), kTrayCallbackMessage, kWindowTitle)) {
@@ -184,4 +266,50 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
   }
 
   return Win32Window::MessageHandler(hwnd, message, wparam, lparam);
+}
+
+void FlutterWindow::RegisterSecretChannel() {
+  if (!flutter_controller_ || !flutter_controller_->engine()) {
+    return;
+  }
+
+  secret_channel_ =
+      std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+          flutter_controller_->engine()->messenger(), "foxel/secret",
+          &flutter::StandardMethodCodec::GetInstance());
+
+  // 只暴露两个动作：protect（明文 → enc:v1:<base64>）与 unprotect（还原）。
+  // 失败一律走 Error，Dart 侧会把加密失败降级为明文，不影响登录可用性。
+  secret_channel_->SetMethodCallHandler(
+      [](const flutter::MethodCall<flutter::EncodableValue>& call,
+         std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>>
+             result) {
+        const auto* argument = std::get_if<std::string>(call.arguments());
+        if (argument == nullptr) {
+          result->Error("bad_argument", "expects a string payload");
+          return;
+        }
+
+        if (call.method_name() == "protect") {
+          std::string encoded;
+          if (!ProtectText(*argument, &encoded)) {
+            result->Error("protect_failed", "CryptProtectData failed");
+            return;
+          }
+          result->Success(flutter::EncodableValue(encoded));
+          return;
+        }
+
+        if (call.method_name() == "unprotect") {
+          std::string plain;
+          if (!UnprotectText(*argument, &plain)) {
+            result->Error("unprotect_failed", "CryptUnprotectData failed");
+            return;
+          }
+          result->Success(flutter::EncodableValue(plain));
+          return;
+        }
+
+        result->NotImplemented();
+      });
 }
