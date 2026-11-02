@@ -38,6 +38,10 @@ class QrCodeDecoder {
       return result.text;
     } on ReaderException {
       return null;
+    } catch (_) {
+      // 解码器对畸形图像还可能抛 ArgumentError / 越界之类的异常。
+      // 扫码页的语义是「没扫到」，任何异常都按未识别处理，不能让相机流崩掉。
+      return null;
     }
   }
 }

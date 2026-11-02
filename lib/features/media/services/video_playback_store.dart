@@ -1,18 +1,19 @@
 import 'dart:convert';
 
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:foxel/core/models/isolation_policy.dart';
 
-import 'package:foxel/core/api/foxel_api.dart';
-
+/// 视频播放进度，按账户沙箱存储（随账户一起清理）。
 class VideoPlaybackStore {
-  static const _prefix = 'video_position_';
+  static const _prefix = 'foxel_acc_';
+  static const _midfix = '_vp_';
 
   Future<Duration?> load({
-    required FoxelApi api,
+    required String accountId,
     required String path,
   }) async {
     final prefs = await SharedPreferences.getInstance();
-    final value = prefs.getInt(_key(api, path));
+    final value = prefs.getInt(_key(accountId, path));
     if (value == null || value <= 0) {
       return null;
     }
@@ -20,24 +21,23 @@ class VideoPlaybackStore {
   }
 
   Future<void> save({
-    required FoxelApi api,
+    required String accountId,
     required String path,
     required Duration position,
   }) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt(_key(api, path), position.inMilliseconds);
+    await prefs.setInt(_key(accountId, path), position.inMilliseconds);
   }
 
-  Future<void> clear({
-    required FoxelApi api,
-    required String path,
-  }) async {
+  Future<void> clear({required String accountId, required String path}) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_key(api, path));
+    await prefs.remove(_key(accountId, path));
   }
 
-  String _key(FoxelApi api, String path) {
-    return '$_prefix${_fnv1a64(utf8.encode('${api.baseUrl}|$path'))}';
+  String _key(String accountId, String path) {
+    // 「独立媒体缓存」关闭时改用共享分区。
+    final scope = IsolationPolicy.cacheScope(accountId);
+    return '$_prefix$scope$_midfix${_fnv1a64(utf8.encode(path))}';
   }
 
   String _fnv1a64(List<int> bytes) {

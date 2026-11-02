@@ -28,6 +28,9 @@ class _ImageViewerPageState extends State<ImageViewerPage> {
   late final Future<Uint8List> _imageFuture;
   late final TransformationController _transformationController;
 
+  /// 视口尺寸：用于按中心缩放，避免缩放锚点跑到左上角。
+  final GlobalKey _viewerKey = GlobalKey();
+
   @override
   void initState() {
     super.initState();
@@ -63,8 +66,24 @@ class _ImageViewerPageState extends State<ImageViewerPage> {
 
   void _setScale(double scale) {
     final nextScale = scale.clamp(_minScale, _maxScale).toDouble();
-    _transformationController.value = Matrix4.identity()
-      ..scaleByDouble(nextScale, nextScale, 1, 1);
+    final matrix = _transformationController.value;
+    final current = matrix.getMaxScaleOnAxis();
+    if (current <= 0) {
+      return;
+    }
+    final size = _viewerKey.currentContext?.size;
+    if (size == null || size.isEmpty) {
+      _transformationController.value = Matrix4.identity()
+        ..scaleByDouble(nextScale, nextScale, 1, 1);
+      return;
+    }
+    final center = Offset(size.width / 2, size.height / 2);
+    final ratio = nextScale / current;
+    // 以视口中心为锚点缩放：T(c) · S(ratio) · T(-c) · M，保留已有平移。
+    final zoom = Matrix4.translationValues(center.dx, center.dy, 0)
+      ..multiply(Matrix4.diagonal3Values(ratio, ratio, 1))
+      ..multiply(Matrix4.translationValues(-center.dx, -center.dy, 0));
+    _transformationController.value = zoom * matrix;
   }
 
   double get _currentScale {
@@ -100,11 +119,22 @@ class _ImageViewerPageState extends State<ImageViewerPage> {
                 child: GestureDetector(
                   onDoubleTap: _toggleZoom,
                   child: InteractiveViewer(
+                    key: _viewerKey,
                     transformationController: _transformationController,
                     minScale: _minScale,
                     maxScale: _maxScale,
                     child: Center(
-                      child: Image.memory(snapshot.data!, fit: BoxFit.contain),
+                      child: Image.memory(
+                        snapshot.data!,
+                        fit: BoxFit.contain,
+                        // 服务端偶尔用 200 返回错误体：解码失败时给提示而不是红屏。
+                        errorBuilder: (_, _, _) => const Center(
+                          child: Text(
+                            '图片解码失败',
+                            style: TextStyle(color: Colors.white70),
+                          ),
+                        ),
+                      ),
                     ),
                   ),
                 ),

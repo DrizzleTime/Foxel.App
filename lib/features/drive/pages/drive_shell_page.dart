@@ -1,44 +1,47 @@
-import 'dart:ui';
-
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import 'package:foxel/core/api/foxel_api.dart';
+import 'package:foxel/core/models/account.dart';
+import 'package:foxel/core/theme/design_tokens.dart';
 import 'package:foxel/features/drive/controllers/transfer_task_controller.dart';
-import 'package:foxel/features/drive/pages/account_settings_page.dart';
 import 'package:foxel/features/drive/pages/file_browser_page.dart';
 import 'package:foxel/features/drive/pages/transfer_tasks_page.dart';
+import 'package:foxel/features/settings/pages/settings_page.dart';
 
 class DriveShellPage extends StatefulWidget {
   const DriveShellPage({
     super.key,
     required this.api,
-    required this.username,
-    required this.email,
-    required this.avatarUrl,
-    required this.baseUrl,
-    required this.onOpenSettings,
-    required this.onLogout,
+    required this.account,
+    required this.accountCount,
+    required this.taskController,
+    required this.onOpenAccountCenter,
+    required this.onAddAccount,
+    required this.onClearLocalData,
   });
 
   final FoxelApi api;
-  final String username;
-  final String email;
-  final String avatarUrl;
-  final String baseUrl;
-  final VoidCallback onOpenSettings;
-  final VoidCallback onLogout;
+
+  /// 当前账户（同时决定界面主题色）。
+  final Account account;
+  final int accountCount;
+  final TransferTaskController taskController;
+
+  /// 打开「账户管理」页（独立二级页）。
+  final VoidCallback onOpenAccountCenter;
+  final VoidCallback onAddAccount;
+  final ValueChanged<Account> onClearLocalData;
 
   @override
-  State<DriveShellPage> createState() => _DriveShellPageState();
+  State<DriveShellPage> createState() => DriveShellPageState();
 }
 
-class _DriveShellPageState extends State<DriveShellPage> {
+class DriveShellPageState extends State<DriveShellPage> {
   int _currentIndex = 0;
   int _previousIndex = 0;
   final Set<int> _visitedIndexes = {0};
   final List<Widget?> _tabs = List<Widget?>.filled(3, null);
-  final TransferTaskController _taskController = TransferTaskController();
 
   @override
   void initState() {
@@ -50,10 +53,8 @@ class _DriveShellPageState extends State<DriveShellPage> {
   void didUpdateWidget(covariant DriveShellPage oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.api != widget.api ||
-        oldWidget.username != widget.username ||
-        oldWidget.email != widget.email ||
-        oldWidget.avatarUrl != widget.avatarUrl ||
-        oldWidget.baseUrl != widget.baseUrl) {
+        oldWidget.account.id != widget.account.id ||
+        oldWidget.taskController != widget.taskController) {
       for (var index = 0; index < _tabs.length; index++) {
         _tabs[index] = null;
       }
@@ -64,11 +65,8 @@ class _DriveShellPageState extends State<DriveShellPage> {
     }
   }
 
-  @override
-  void dispose() {
-    _taskController.dispose();
-    super.dispose();
-  }
+  /// 供外部（如切换账户后）切换底部导航页签。
+  void selectTab(int index) => _selectIndex(index);
 
   void _selectIndex(int index) {
     if (index == _currentIndex) {
@@ -84,19 +82,28 @@ class _DriveShellPageState extends State<DriveShellPage> {
 
   Widget _buildTab(int index) {
     return switch (index) {
+      // 以账户 ID 作为 key：切换账户时强制重建页面 State，
+      // 否则会复用旧 State 继续显示上一个账户的目录与列表数据。
       0 => FileBrowserPage(
+        key: ValueKey<String>('files-${widget.account.id}'),
         api: widget.api,
-        taskController: _taskController,
+        taskController: widget.taskController,
+        account: widget.account,
         onOpenTasks: () => _selectIndex(1),
+        onOpenAccountCenter: widget.onOpenAccountCenter,
       ),
-      1 => TransferTasksPage(controller: _taskController),
-      _ => AccountSettingsPage(
-        username: widget.username,
-        email: widget.email,
-        avatarUrl: widget.avatarUrl,
-        baseUrl: widget.baseUrl,
-        onSwitchServer: widget.onOpenSettings,
-        onLogout: widget.onLogout,
+      1 => TransferTasksPage(
+        key: ValueKey<String>('tasks-${widget.account.id}'),
+        controller: widget.taskController,
+        api: widget.api,
+      ),
+      _ => SettingsPage(
+        key: ValueKey<String>('settings-${widget.account.id}'),
+        account: widget.account,
+        accountCount: widget.accountCount,
+        onOpenAccountCenter: widget.onOpenAccountCenter,
+        onAddAccount: widget.onAddAccount,
+        onClearLocalData: widget.onClearLocalData,
       ),
     };
   }
@@ -116,10 +123,17 @@ class _DriveShellPageState extends State<DriveShellPage> {
           Positioned(
             left: 20,
             right: 20,
-            bottom: 8,
-            child: _FloatingBottomNav(
-              currentIndex: _currentIndex,
-              onSelected: _selectIndex,
+            bottom: 0,
+            child: SafeArea(
+              top: false,
+              // 12px 既是安全区最小间距，也为下方阴影（offset 6 + 模糊 7）留出空间，
+              // 避免阴影被屏幕底边/系统导航条裁切后形成「重叠阴影」。
+              minimum: const EdgeInsets.only(bottom: 12),
+              child: _FloatingBottomNav(
+                currentIndex: _currentIndex,
+                onSelected: _selectIndex,
+                activeColor: Color(widget.account.colorValue),
+              ),
             ),
           ),
         ],
@@ -197,10 +211,12 @@ class _FloatingBottomNav extends StatelessWidget {
   const _FloatingBottomNav({
     required this.currentIndex,
     required this.onSelected,
+    required this.activeColor,
   });
 
   final int currentIndex;
   final ValueChanged<int> onSelected;
+  final Color activeColor;
 
   static const _items = [
     _NavItem(
@@ -220,103 +236,66 @@ class _FloatingBottomNav extends StatelessWidget {
     ),
   ];
 
+  /// 导航条高度：内边距 6 + 内容 62。
+  static const double navHeight = 74;
+
+  /// 内容区内边距。
+  static const double _inset = 6;
+
+  /// 相邻两个选项之间的间隔（选中胶囊左右各留一半）。
+  static const double _segmentGap = 14;
+
   @override
   Widget build(BuildContext context) {
-    return SafeArea(
-      top: false,
-      child: SizedBox(
-        height: 74,
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(30),
-          child: Stack(
-            children: [
-              BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 28, sigmaY: 28),
-                child: Container(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [
-                        const Color(0xFFF4F6F8).withValues(alpha: 0.76),
-                        const Color(0xFFD7DDE4).withValues(alpha: 0.50),
-                      ],
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                    ),
-                    borderRadius: BorderRadius.circular(30),
-                    border: Border.all(
-                      color: Colors.white.withValues(alpha: 0.62),
-                    ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: const Color(0xFF8B97AA).withValues(alpha: 0.12),
-                        blurRadius: 20,
-                        offset: const Offset(0, 10),
-                      ),
-                      BoxShadow(
-                        color: Colors.white.withValues(alpha: 0.24),
-                        blurRadius: 1,
-                        offset: const Offset(0, 1),
-                      ),
+    // SafeArea 由外层负责，这里只画胶囊本体，避免底部安全区被算进胶囊高度
+    // 而在下方留出一段透明空洞（阴影落进去就会和系统导航区叠在一起）。
+    return SizedBox(
+      height: navHeight,
+      child: Container(
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(AppRadii.nav),
+          border: Border.all(color: AppColors.border),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x1A8B97AA),
+              blurRadius: 14,
+              offset: Offset(0, 6),
+            ),
+          ],
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(_inset),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final segmentWidth = constraints.maxWidth / _items.length;
+              return Stack(
+                children: [
+                  AnimatedPositioned(
+                    duration: const Duration(milliseconds: 260),
+                    curve: Curves.easeOutCubic,
+                    left: segmentWidth * currentIndex + _segmentGap / 2,
+                    top: 0,
+                    width: segmentWidth - _segmentGap,
+                    height: constraints.maxHeight,
+                    child: _SelectedNavSegment(color: activeColor),
+                  ),
+                  Row(
+                    children: [
+                      for (var index = 0; index < _items.length; index++)
+                        Expanded(
+                          child: _FloatingNavButton(
+                            item: _items[index],
+                            selected: index == currentIndex,
+                            activeColor: activeColor,
+                            onTap: () => onSelected(index),
+                          ),
+                        ),
                     ],
                   ),
-                ),
-              ),
-              Positioned(
-                left: 14,
-                right: 14,
-                top: 6,
-                child: IgnorePointer(
-                  child: Container(
-                    height: 14,
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(999),
-                      gradient: LinearGradient(
-                        colors: [
-                          Colors.white.withValues(alpha: 0.56),
-                          Colors.white.withValues(alpha: 0.04),
-                        ],
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(6, 6, 6, 6),
-                child: LayoutBuilder(
-                  builder: (context, constraints) {
-                    const segmentGap = 14.0;
-                    final segmentWidth = constraints.maxWidth / _items.length;
-                    return Stack(
-                      children: [
-                        AnimatedPositioned(
-                          duration: const Duration(milliseconds: 260),
-                          curve: Curves.easeOutCubic,
-                          left: segmentWidth * currentIndex + segmentGap / 2,
-                          top: 2,
-                          width: segmentWidth - segmentGap,
-                          height: constraints.maxHeight - 4,
-                          child: const _SelectedNavSegment(),
-                        ),
-                        Row(
-                          children: [
-                            for (var index = 0; index < _items.length; index++)
-                              Expanded(
-                                child: _FloatingNavButton(
-                                  item: _items[index],
-                                  selected: index == currentIndex,
-                                  onTap: () => onSelected(index),
-                                ),
-                              ),
-                          ],
-                        ),
-                      ],
-                    );
-                  },
-                ),
-              ),
-            ],
+                ],
+              );
+            },
           ),
         ),
       ),
@@ -328,23 +307,30 @@ class _FloatingNavButton extends StatelessWidget {
   const _FloatingNavButton({
     required this.item,
     required this.selected,
+    required this.activeColor,
     required this.onTap,
   });
 
   final _NavItem item;
   final bool selected;
+  final Color activeColor;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    const activeColor = Color(0xFF3366F5);
-    const inactiveColor = Color(0xFF818791);
+    const inactiveColor = AppColors.ink3;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 2),
       child: Material(
         type: MaterialType.transparency,
         child: InkWell(
-          borderRadius: BorderRadius.circular(22),
+          // 与选中胶囊圆角一致；按压反馈完全交给胶囊动画，
+          // 禁用 splash/highlight，避免在胶囊外沿出现比胶囊更大的高亮块。
+          borderRadius: BorderRadius.circular(AppRadii.navSegment),
+          splashFactory: NoSplash.splashFactory,
+          splashColor: Colors.transparent,
+          highlightColor: Colors.transparent,
+          hoverColor: Colors.transparent,
           onTap: onTap,
           child: SizedBox.expand(
             child: Column(
@@ -364,12 +350,16 @@ class _FloatingNavButton extends StatelessWidget {
                 AnimatedDefaultTextStyle(
                   duration: const Duration(milliseconds: 220),
                   curve: Curves.easeOutCubic,
-                  style: Theme.of(context).textTheme.labelSmall!.copyWith(
-                    color: selected ? activeColor : inactiveColor,
-                    fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                    fontSize: 10,
-                    letterSpacing: 0,
-                    height: 1,
+                  // AnimatedDefaultTextStyle 会替换外层样式，必须显式带上字体栈，
+                  // 否则导航标签会掉回引擎默认字体（汉字变宋体）。
+                  style: AppFonts.apply(
+                    TextStyle(
+                      color: selected ? activeColor : inactiveColor,
+                      fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+                      fontSize: 10.5,
+                      letterSpacing: 0,
+                      height: 1,
+                    ),
                   ),
                   child: Text(
                     item.label,
@@ -387,60 +377,16 @@ class _FloatingNavButton extends StatelessWidget {
 }
 
 class _SelectedNavSegment extends StatelessWidget {
-  const _SelectedNavSegment();
+  const _SelectedNavSegment({required this.color});
+
+  final Color color;
 
   @override
   Widget build(BuildContext context) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(22),
-      child: Stack(
-        children: [
-          BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
-            child: Container(
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(22),
-                gradient: LinearGradient(
-                  colors: [
-                    Colors.white.withValues(alpha: 0.66),
-                    const Color(0xFFE4E8EE).withValues(alpha: 0.42),
-                  ],
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                ),
-                border: Border.all(color: Colors.white.withValues(alpha: 0.52)),
-                boxShadow: [
-                  BoxShadow(
-                    color: const Color(0xFFACB7C8).withValues(alpha: 0.14),
-                    blurRadius: 12,
-                    offset: const Offset(0, 6),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          Positioned(
-            left: 8,
-            right: 8,
-            top: 3,
-            child: IgnorePointer(
-              child: Container(
-                height: 12,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(999),
-                  gradient: LinearGradient(
-                    colors: [
-                      Colors.white.withValues(alpha: 0.70),
-                      Colors.white.withValues(alpha: 0.08),
-                    ],
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ],
+    return Container(
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(AppRadii.navSegment),
       ),
     );
   }

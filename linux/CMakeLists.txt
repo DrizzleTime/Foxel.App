@@ -1,10 +1,13 @@
 # Project-level configuration.
 cmake_minimum_required(VERSION 3.13)
-project(runner LANGUAGES CXX)
+project(runner VERSION 1.0.10 LANGUAGES CXX)
 
 # The name of the executable created for the application. Change this to change
 # the on-disk name of your application.
 set(BINARY_NAME "Foxel")
+
+# 应用版本（与 pubspec.yaml / lib/core/app_version.dart 保持一致）
+set(PROJECT_VERSION_APP "1.0.11")
 # The unique GTK application identifier for this application. See:
 # https://wiki.gnome.org/HowDoI/ChooseApplicationID
 set(APPLICATION_ID "cc.foxel.app")

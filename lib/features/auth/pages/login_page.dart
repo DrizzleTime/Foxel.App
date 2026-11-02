@@ -13,8 +13,8 @@ import 'package:foxel/features/auth/services/qr_code_decoder.dart';
 
 enum _LoginMode { manual, qr }
 
-class SettingsPage extends StatefulWidget {
-  const SettingsPage({
+class LoginPage extends StatefulWidget {
+  const LoginPage({
     super.key,
     required this.initialBaseUrl,
     required this.onLoggedIn,
@@ -24,10 +24,10 @@ class SettingsPage extends StatefulWidget {
   final ValueChanged<FoxelSession> onLoggedIn;
 
   @override
-  State<SettingsPage> createState() => _SettingsPageState();
+  State<LoginPage> createState() => _LoginPageState();
 }
 
-class _SettingsPageState extends State<SettingsPage> {
+class _LoginPageState extends State<LoginPage> {
   final _decoder = const QrCodeDecoder();
   final _baseUrlController = TextEditingController();
   final _usernameController = TextEditingController();
@@ -106,7 +106,13 @@ class _SettingsPageState extends State<SettingsPage> {
             ? ImageFormatGroup.yuv420
             : null,
       );
-      await controller.initialize();
+      try {
+        await controller.initialize();
+      } catch (_) {
+        // 初始化失败必须释放，否则相机句柄被一直占着，重试也开不起来。
+        await controller.dispose();
+        rethrow;
+      }
 
       if (!mounted) {
         await controller.dispose();
@@ -394,13 +400,19 @@ class _SettingsPageState extends State<SettingsPage> {
       _errorText = null;
       _statusText = '正在登录';
     });
+    FoxelApi? client;
     try {
+      // 放在 try 内：地址为空 / 非法时构造会抛异常，
+      // 若在外面构造会导致 _loggingIn 无法复位，按钮永久卡在「登录中」。
       final api = FoxelApi(baseUrl: _baseUrlController.text);
+      client = api;
       final session = await api.login(
         username: _usernameController.text,
         password: _passwordController.text,
       );
-      api.close();
+      if (!mounted) {
+        return;
+      }
       widget.onLoggedIn(session);
     } catch (error) {
       if (!mounted) {
@@ -411,6 +423,8 @@ class _SettingsPageState extends State<SettingsPage> {
         _statusText = null;
       });
     } finally {
+      // 无论成功失败都关闭临时客户端，避免失败路径泄漏连接。
+      client?.close();
       if (mounted) {
         setState(() => _loggingIn = false);
       }
@@ -418,7 +432,23 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   Future<void> _submitRawValue(String rawValue) async {
-    final payload = QrLoginPayload.parse(rawValue);
+    // 由相机帧回调触发，需自行兜住异常并检查生命周期。
+    final QrLoginPayload payload;
+    try {
+      payload = QrLoginPayload.parse(rawValue);
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _errorText = error.toString();
+        _statusText = null;
+      });
+      return;
+    }
+    if (!mounted) {
+      return;
+    }
     setState(() {
       _baseUrlController.text = payload.baseUrl;
       _statusText = '正在验证登录状态';
@@ -432,17 +462,19 @@ class _SettingsPageState extends State<SettingsPage> {
       return;
     }
     setState(() => _loggingIn = true);
+    final client = FoxelApi(baseUrl: payload.baseUrl, token: payload.token);
     try {
-      final api = FoxelApi(baseUrl: payload.baseUrl, token: payload.token);
-      final profile = await api.me();
+      final profile = await client.me();
       final session = FoxelSession(
-        baseUrl: api.baseUrl,
+        baseUrl: client.baseUrl,
         username: profile.username.isEmpty ? '未命名用户' : profile.username,
         token: payload.token,
         email: profile.email,
         avatarUrl: profile.avatarUrl,
       );
-      api.close();
+      if (!mounted) {
+        return;
+      }
       widget.onLoggedIn(session);
     } catch (error) {
       if (!mounted) {
@@ -453,6 +485,7 @@ class _SettingsPageState extends State<SettingsPage> {
         _statusText = null;
       });
     } finally {
+      client.close();
       if (mounted) {
         setState(() => _loggingIn = false);
       }
@@ -465,7 +498,7 @@ class _SettingsPageState extends State<SettingsPage> {
     final hasPreview = controller != null && controller.value.isInitialized;
     final cameraScanSupported = _cameraScanSupported;
     return Scaffold(
-      appBar: AppBar(title: const Text('Foxel 设置')),
+      appBar: AppBar(title: const Text('添加账户')),
       body: SafeArea(
         child: ListView(
           padding: const EdgeInsets.all(20),

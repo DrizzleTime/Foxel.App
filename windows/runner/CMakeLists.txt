@@ -9,6 +9,7 @@ project(runner LANGUAGES CXX)
 add_executable(${BINARY_NAME} WIN32
   "flutter_window.cpp"
   "main.cpp"
+  "tray_icon.cpp"
   "utils.cpp"
   "win32_window.cpp"
   "${FLUTTER_MANAGED_DIR}/generated_plugin_registrant.cc"
@@ -19,6 +20,12 @@ add_executable(${BINARY_NAME} WIN32
 # Apply the standard set of build settings. This can be removed for applications
 # that need different build settings.
 apply_standard_settings(${BINARY_NAME})
+
+# 托盘菜单文案是中文，源码为 UTF-8。apply_standard_settings 带 /W4 /WX，
+# 缺少 /utf-8 时 MSVC 会按本地代码页解析中文（C4819），直接编译失败或输出乱码。
+if(MSVC)
+  target_compile_options(${BINARY_NAME} PRIVATE "/utf-8")
+endif()
 
 # Add preprocessor definitions for the build version.
 target_compile_definitions(${BINARY_NAME} PRIVATE "FLUTTER_VERSION=\"${FLUTTER_VERSION}\"")
@@ -34,6 +41,11 @@ target_compile_definitions(${BINARY_NAME} PRIVATE "NOMINMAX")
 # dependencies here.
 target_link_libraries(${BINARY_NAME} PRIVATE flutter flutter_wrapper_app)
 target_link_libraries(${BINARY_NAME} PRIVATE "dwmapi.lib")
+# Shell_NotifyIcon / NOTIFYICONDATA 来自 shell32。
+target_link_libraries(${BINARY_NAME} PRIVATE "shell32.lib")
+# CryptProtectData / CryptUnprotectData / CryptBinaryToString 来自 crypt32。
+# 用于把账户 token 用当前 Windows 用户密钥加密后再落盘。
+target_link_libraries(${BINARY_NAME} PRIVATE "crypt32.lib")
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 
 # Run the Flutter tool portions of the build. This must not be removed.

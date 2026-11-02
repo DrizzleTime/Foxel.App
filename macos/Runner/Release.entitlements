@@ -4,6 +4,15 @@
 <dict>
 	<key>com.apple.security.app-sandbox</key>
 	<true/>
+	<!-- 出站网络：云盘客户端的核心能力，沙箱下必须显式声明 -->
+	<key>com.apple.security.network.client</key>
+	<true/>
+	<!-- 默认下载位置为 ~/Downloads -->
+	<key>com.apple.security.files.downloads.read-write</key>
+	<true/>
+	<!-- 允许用户在「下载目录」中选择其它文件夹 -->
+	<key>com.apple.security.files.user-selected.read-write</key>
+	<true/>
 	<key>com.apple.security.device.camera</key>
 	<true/>
 </dict>

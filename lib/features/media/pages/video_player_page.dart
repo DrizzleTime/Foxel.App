@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
@@ -12,6 +13,7 @@ class VideoPlayerPage extends StatefulWidget {
   const VideoPlayerPage({
     super.key,
     required this.api,
+    required this.accountId,
     required this.path,
     required this.name,
     required this.size,
@@ -19,6 +21,7 @@ class VideoPlayerPage extends StatefulWidget {
   });
 
   final FoxelApi api;
+  final String accountId;
   final String path;
   final String name;
   final int size;
@@ -112,7 +115,7 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
       await _player.setVolume(_volume * 100);
       await _player.setRate(_playbackSpeed);
       final savedPosition = await _playbackStore.load(
-        api: widget.api,
+        accountId: widget.accountId,
         path: widget.path,
       );
       final startPosition =
@@ -128,14 +131,20 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
         ),
       );
       _log('media opened start=$startPosition');
+      // 打开过程中可能已被 pop：此时不要再起定时器（会泄漏并反复写旧进度）。
+      if (!mounted) {
+        return;
+      }
       _startPositionTimer();
       _scheduleControlsHide();
     } catch (error, stackTrace) {
       _log('initialize failed: $error');
-      debugPrintStack(
-        label: '[VideoPlayer] initialize stack',
-        stackTrace: stackTrace,
-      );
+      if (kDebugMode) {
+        debugPrintStack(
+          label: '[VideoPlayer] initialize stack',
+          stackTrace: stackTrace,
+        );
+      }
       rethrow;
     }
   }
@@ -248,7 +257,9 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
   Future<void> _seekBy(Duration offset) async {
     final target = _position + offset;
     await _seekToAndPlay(target);
-    _showControlsTemporarily();
+    if (mounted) {
+      _showControlsTemporarily();
+    }
   }
 
   Future<void> _seekTo(Duration target) async {
@@ -260,21 +271,30 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
     await _player.seek(clamped);
   }
 
+  /// 跳转后保持原有播放状态：暂停时只移动进度，不会自动播起来。
   Future<void> _seekToAndPlay(Duration target) async {
+    final wasPlaying = _isPlaying;
     await _seekTo(target);
+    if (!wasPlaying) {
+      return;
+    }
     await _player.play();
   }
 
   Future<void> _setPlaybackSpeed(double speed) async {
     setState(() => _playbackSpeed = speed);
     await _player.setRate(speed);
-    _showControlsTemporarily();
+    if (mounted) {
+      _showControlsTemporarily();
+    }
   }
 
   Future<void> _setVolume(double volume) async {
     setState(() => _volume = volume);
     await _player.setVolume(volume * 100);
-    _showControlsTemporarily();
+    if (mounted) {
+      _showControlsTemporarily();
+    }
   }
 
   Future<void> _toggleMute() async {
@@ -336,10 +356,15 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
   }
 
   void _log(String message) {
-    debugPrint('[VideoPlayer] $message');
+    if (kDebugMode) {
+      debugPrint('[VideoPlayer] $message');
+    }
   }
 
   void _startPositionTimer() {
+    if (!mounted) {
+      return;
+    }
     _savePositionTimer?.cancel();
     _savePositionTimer = Timer.periodic(
       _savePositionInterval,
@@ -352,12 +377,15 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
       return;
     }
     if (_duration - _position <= const Duration(seconds: 10)) {
-      await _playbackStore.clear(api: widget.api, path: widget.path);
+      await _playbackStore.clear(
+        accountId: widget.accountId,
+        path: widget.path,
+      );
       return;
     }
     if (_position > const Duration(seconds: 3)) {
       await _playbackStore.save(
-        api: widget.api,
+        accountId: widget.accountId,
         path: widget.path,
         position: _position,
       );

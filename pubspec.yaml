@@ -1,5 +1,5 @@
 name: foxel
-description: "A new Flutter project."
+description: "Foxel 客户端：多账户隔离的私有云盘客户端（Android / iOS / Windows / macOS / Linux）。"
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.0.0+1
+version: 1.0.11+11
 
 environment:
   sdk: ^3.11.5
@@ -39,7 +39,9 @@ dependencies:
   camera: ^0.12.0+1
   open_filex: ^4.7.0
   path_provider: ^2.1.5
+  shared_preferences_platform_interface: ^2.4.1
   shared_preferences: ^2.5.3
+  characters: ^1.4.0
   image: ^4.8.0
   zxing2: ^0.2.4
   media_kit: ^1.2.6

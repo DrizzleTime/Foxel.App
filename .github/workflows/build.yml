@@ -3,6 +3,7 @@ name: Build All Platforms
 on:
   push:
     branches: [ main, master ]
+    tags: [ 'v*' ]
   workflow_dispatch:
 
 jobs:
@@ -53,14 +54,19 @@ jobs:
       - name: Build ABI split APKs
         run: bash scripts/build_android_split_apk.sh
 
+      - name: Rename APKs by ABI
+        run: |
+          mkdir -p dist
+          cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk   dist/Foxel-android-arm64-v8a.apk
+          cp build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk dist/Foxel-android-armeabi-v7a.apk
+          cp build/app/outputs/flutter-apk/app-x86_64-release.apk      dist/Foxel-android-x86_64.apk
+          ls -lh dist
+
       - name: Upload APKs
         uses: actions/upload-artifact@v4
         with:
-          name: foxel-android-split-apks
-          path: |
-            build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
-            build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
-            build/app/outputs/flutter-apk/app-x86_64-release.apk
+          name: foxel-android-apks
+          path: dist/*.apk
           if-no-files-found: error
 
   build-linux:
@@ -88,17 +94,30 @@ jobs:
       - name: Build Linux
         run: flutter build linux --release
 
-      - name: Upload Linux bundle
+      - name: Package TAR.GZ
+        run: |
+          tar -czf Foxel-linux-x86_64.tar.gz -C build/linux/x64/release/bundle .
+          ls -lh Foxel-linux-x86_64.tar.gz
+
+      - name: Upload Linux TAR.GZ
         uses: actions/upload-artifact@v4
         with:
-          name: foxel-linux-bundle
-          path: build/linux/x64/release/bundle
+          name: foxel-linux-targz
+          path: Foxel-linux-x86_64.tar.gz
           if-no-files-found: error
 
+  # 注意：仓库内任何文件都不要使用非 ASCII 文件名。
+  # 历史提交曾含中文文件名，Windows 端 git 视为非法路径，会让该 runner 上后续
+  # 所有 checkout 失败（仓库清理后仍可能因 runner 缓存残留而持续失败）。
   build-windows:
     name: Windows App
     runs-on: windows-latest
     steps:
+      # Git for Windows 会把某些路径视为 NTFS 非法路径而拒绝检出/清理，
+      # 关闭该保护可让 checkout 正常处理（含清理历史遗留的问题路径）。
+      - name: Disable NTFS path protection
+        shell: bash
+        run: git config --global core.protectNTFS false
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -115,11 +134,17 @@ jobs:
       - name: Build Windows
         run: flutter build windows --release
 
-      - name: Upload Windows bundle
+      - name: Package ZIP
+        shell: pwsh
+        run: |
+          Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath Foxel-windows-x86_64.zip
+          Get-Item Foxel-windows-x86_64.zip | Select-Object Name, Length
+
+      - name: Upload Windows ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: foxel-windows-bundle
-          path: build/windows/x64/runner/Release
+          name: foxel-windows-zip
+          path: Foxel-windows-x86_64.zip
           if-no-files-found: error
 
   build-macos:
@@ -142,11 +167,19 @@ jobs:
       - name: Build macOS
         run: flutter build macos --release
 
-      - name: Upload macOS bundle
+      # 必须用 ditto：保留 .app 内的符号链接与可执行权限，普通 zip 会损坏应用
+      - name: Package ZIP (ditto)
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent \
+            build/macos/Build/Products/Release/Foxel.app \
+            Foxel-macos-arm64.zip
+          ls -lh Foxel-macos-arm64.zip
+
+      - name: Upload macOS ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: foxel-macos-bundle
-          path: build/macos/Build/Products/Release/Foxel.app
+          name: foxel-macos-zip
+          path: Foxel-macos-arm64.zip
           if-no-files-found: error
 
   build-ios:
@@ -174,11 +207,51 @@ jobs:
           mkdir -p build/ios/ipa/Payload
           ditto build/ios/iphoneos/Runner.app build/ios/ipa/Payload/Runner.app
           cd build/ios/ipa
-          zip -r foxel-ios-unsigned.ipa Payload
+          zip -r Foxel-ios-arm64-unsigned.ipa Payload
+          ls -lh Foxel-ios-arm64-unsigned.ipa
 
       - name: Upload unsigned IPA
         uses: actions/upload-artifact@v4
         with:
-          name: foxel-ios-unsigned-ipa
-          path: build/ios/ipa/foxel-ios-unsigned.ipa
+          name: foxel-ios-ipa
+          path: build/ios/ipa/Foxel-ios-arm64-unsigned.ipa
           if-no-files-found: error
+
+  # 推送形如 v1.0.2 的 tag 时，自动把全平台安装包发布到 GitHub Release
+  release:
+    name: Publish Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-android, build-linux, build-windows, build-macos, build-ios]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # 需要仓库文件来读取 .github/release_notes.md
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List release assets
+        run: ls -lh dist
+
+      # 说明里的下载链接需要带上当前 tag，渲染后再作为 body 使用
+      - name: Render release notes
+        run: |
+          sed -e "s|__REPO__|${{ github.repository }}|g" \
+              -e "s|__TAG__|${{ github.ref_name }}|g" \
+              .github/release_notes.md > release_notes_rendered.md
+          head -8 release_notes_rendered.md
+
+      - name: Publish Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Foxel ${{ github.ref_name }}
+          body_path: release_notes_rendered.md
+          files: dist/*
+          draft: false
+          prerelease: false

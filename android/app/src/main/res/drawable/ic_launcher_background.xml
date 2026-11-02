@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  自适应图标背景层：与设计稿一致的 135° 主色渐变。
+  Android 的 angle 以 45 为步进，315 等价于「左上 → 右下」。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <gradient
+        android:angle="315"
+        android:endColor="#6B4EE6"
+        android:startColor="#5B7CFF"
+        android:type="linear" />
+</shape>
