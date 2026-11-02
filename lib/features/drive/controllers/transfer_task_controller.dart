@@ -1,9 +1,11 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
 import 'package:foxel/core/api/foxel_api.dart';
+import 'package:foxel/core/api/transfer_cancel.dart';
 
 enum TransferTaskType { upload, download }
 
@@ -69,43 +71,74 @@ class TransferTask {
   }
 }
 
+/// 一个排队中的传输任务。
+class _TransferJob {
+  _TransferJob({required this.taskId, required this.run, this.onSuccess});
+
+  final int taskId;
+  final Future<void> Function() run;
+  final VoidCallback? onSuccess;
+}
+
 class TransferTaskController {
+  /// 同时在跑的传输数量上限。
+  ///
+  /// 批量下载 50 个文件时，逐个 `unawaited` 会瞬间打满连接池与文件句柄，
+  /// 服务和磁盘一起抖。卡在 3 个既能吃满带宽，又不会把对方打爆。
+  static const int maxConcurrent = 3;
+
+  /// 进度刷新间隔：每个 chunk 都重建列表，4GB 文件会产生数万次无意义重建。
+  static const Duration _progressInterval = Duration(milliseconds: 120);
+
   final ValueNotifier<List<TransferTask>> tasks =
       ValueNotifier<List<TransferTask>>(<TransferTask>[]);
 
-  int _nextId = 1;
-  bool _disposed = false;
+  /// 待执行队列（先进先出）。
+  final Queue<_TransferJob> _pending = Queue<_TransferJob>();
 
-  /// 已被主动中断（切账户/删账户）的任务 id。
-  /// 用于防止底层请求「抢跑成功」把状态又翻回「已完成」。
-  final Set<int> _interrupted = <int>{};
+  /// 在途任务的取消令牌。
+  final Map<int, TransferCancelToken> _cancelTokens = <int, TransferCancelToken>{};
+
+  /// 上次推送进度的时刻（节流用）。
+  final Map<int, DateTime> _lastProgressAt = <int, DateTime>{};
+
+  int _nextId = 1;
+  int _running = 0;
+  bool _disposed = false;
 
   void dispose() {
     _disposed = true;
-    _interrupted.clear();
+    // 控制器被销毁时没人接收结果了，在途请求直接取消，别继续占带宽写磁盘。
+    for (final token in _cancelTokens.values) {
+      token.cancel('传输已取消');
+    }
+    _cancelTokens.clear();
+    _pending.clear();
+    _lastProgressAt.clear();
     tasks.dispose();
   }
 
-  /// 切换账户时中断本账户仍在进行的任务（方案 A：不跨账户并行传输）。
+  /// 切换账户 / 删除账户：真正中断本账户的传输。
+  ///
+  /// 分两类处理：在途的置位令牌（下一个 chunk 就会停并清理 `.part`），
+  /// 排队中的直接从队列摘掉标记失败 —— 否则它们会一直占着并发槽位。
   void interruptAll(String reason) {
     if (_disposed) {
       return;
     }
-    for (final task in tasks.value) {
-      if (task.status == TransferTaskStatus.running) {
-        _interrupted.add(task.id);
-      }
+    for (final token in _cancelTokens.values) {
+      token.cancel(reason);
     }
-    tasks.value = [
-      for (final task in tasks.value)
-        if (task.status == TransferTaskStatus.running)
-          task.copyWith(
-            status: TransferTaskStatus.failed,
-            errorMessage: reason,
-          )
-        else
-          task,
-    ];
+    while (_pending.isNotEmpty) {
+      final job = _pending.removeFirst();
+      _updateTask(
+        job.taskId,
+        (task) => task.copyWith(
+          status: TransferTaskStatus.failed,
+          errorMessage: reason,
+        ),
+      );
+    }
   }
 
   void clearFinished() {
@@ -134,21 +167,20 @@ class TransferTaskController {
       return;
     }
 
-    unawaited(
-      _runTask(
-        task.id,
-        () => api.uploadFile(
+    final token = TransferCancelToken();
+    _cancelTokens[task.id] = token;
+    _enqueue(
+      _TransferJob(
+        taskId: task.id,
+        onSuccess: onSuccess,
+        run: () => api.uploadFile(
           remotePath: remotePath,
           localPath: localPath,
+          cancelToken: token,
           onProgress: (sent, total) {
-            _updateTask(
-              task.id,
-              (task) =>
-                  task.copyWith(transferredBytes: sent, totalBytes: total),
-            );
+            _updateProgress(task.id, sent, total);
           },
         ),
-        onSuccess: onSuccess,
       ),
     );
   }
@@ -169,21 +201,17 @@ class TransferTaskController {
       return;
     }
 
-    unawaited(
-      _runTask(
-        task.id,
-        () => api.downloadFile(
+    final token = TransferCancelToken();
+    _cancelTokens[task.id] = token;
+    _enqueue(
+      _TransferJob(
+        taskId: task.id,
+        run: () => api.downloadFile(
           remotePath: remotePath,
           outputFile: outputFile,
+          cancelToken: token,
           onProgress: (received, total) {
-            _updateTask(
-              task.id,
-              (task) => task.copyWith(
-                transferredBytes: received,
-                totalBytes: total,
-                clearTotalBytes: total == null,
-              ),
-            );
+            _updateProgress(task.id, received, total);
           },
         ),
       ),
@@ -218,38 +246,85 @@ class TransferTaskController {
     return task;
   }
 
-  Future<void> _runTask(
-    int id,
-    Future<void> Function() action, {
-    VoidCallback? onSuccess,
-  }) async {
+  void _enqueue(_TransferJob job) {
+    if (_disposed) {
+      return;
+    }
+    _pending.add(job);
+    _pump();
+  }
+
+  /// 拉起排队任务，直到跑满 [maxConcurrent] 或队列空。
+  void _pump() {
+    while (!_disposed && _running < maxConcurrent && _pending.isNotEmpty) {
+      final job = _pending.removeFirst();
+      _running += 1;
+      unawaited(_runJob(job));
+    }
+  }
+
+  Future<void> _runJob(_TransferJob job) async {
     try {
-      await action();
-      // 已被切账户/删账户中断：保持「已中断」状态，不翻回成功。
-      if (_interrupted.remove(id)) {
+      await job.run();
+      if (_disposed) {
         return;
       }
       _updateTask(
-        id,
+        job.taskId,
         (task) => task.copyWith(
           status: TransferTaskStatus.success,
           transferredBytes: task.totalBytes ?? task.transferredBytes,
           clearError: true,
         ),
       );
-      onSuccess?.call();
-    } catch (error) {
-      if (_interrupted.remove(id)) {
-        return;
+      job.onSuccess?.call();
+    } on TransferCancelledException catch (cancelled) {
+      if (!_disposed) {
+        _updateTask(
+          job.taskId,
+          (task) => task.copyWith(
+            status: TransferTaskStatus.failed,
+            errorMessage: cancelled.reason,
+          ),
+        );
       }
-      _updateTask(
-        id,
-        (task) => task.copyWith(
-          status: TransferTaskStatus.failed,
-          errorMessage: error.toString(),
-        ),
-      );
+    } catch (error) {
+      if (!_disposed) {
+        _updateTask(
+          job.taskId,
+          (task) => task.copyWith(
+            status: TransferTaskStatus.failed,
+            errorMessage: error.toString(),
+          ),
+        );
+      }
+    } finally {
+      _running -= 1;
+      _cancelTokens.remove(job.taskId);
+      _lastProgressAt.remove(job.taskId);
+      if (!_disposed) {
+        _pump();
+      }
     }
+  }
+
+  /// 进度节流：低于 [_progressInterval] 的重复回调直接丢弃。
+  /// 任务结束时会被状态更新补齐到 100%，不会停在 99%。
+  void _updateProgress(int id, int transferred, int? total) {
+    final now = DateTime.now();
+    final last = _lastProgressAt[id];
+    if (last != null && now.difference(last) < _progressInterval) {
+      return;
+    }
+    _lastProgressAt[id] = now;
+    _updateTask(
+      id,
+      (task) => task.copyWith(
+        transferredBytes: transferred,
+        totalBytes: total,
+        clearTotalBytes: total == null,
+      ),
+    );
   }
 
   void _updateTask(int id, TransferTask Function(TransferTask task) update) {

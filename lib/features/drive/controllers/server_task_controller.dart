@@ -31,6 +31,12 @@ class ServerTaskController {
   bool _fetching = false;
   bool _disposed = false;
 
+  /// 是否已被 [stop] 暂停。
+  ///
+  /// 只取消 Timer 是不够的：`_tick` 在 `await refresh()` 返回后会无条件排下一轮，
+  /// 于是 stop() 之后轮询会自己复活。必须留一个标志让 `_tick` 自己退出。
+  bool _stopped = false;
+
   bool get isDisposed => _disposed;
 
   /// 开始轮询（页面可见时调用）。
@@ -38,24 +44,26 @@ class ServerTaskController {
     if (_disposed || _timer != null || _fetching) {
       return;
     }
+    _stopped = false;
     loading.value = tasks.value.isEmpty;
     unawaited(_tick());
   }
 
   /// 停止轮询（页面不可见时调用），避免离开任务页后仍在发请求。
   void stop() {
+    _stopped = true;
     _timer?.cancel();
     _timer = null;
   }
 
   Future<void> _tick() async {
-    if (_disposed) {
+    if (_disposed || _stopped) {
       return;
     }
     _timer?.cancel();
     _timer = null;
     await refresh();
-    if (_disposed) {
+    if (_disposed || _stopped) {
       return;
     }
     final hasActive = tasks.value.any((task) => task.isActive);

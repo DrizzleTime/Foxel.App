@@ -1,5 +1,7 @@
 import 'dart:math';
 
+import 'package:characters/characters.dart';
+
 /// 一个 Foxel 账户 = 一个独立沙箱。
 ///
 /// 每个账户拥有自己的凭证、下载目录、传输任务、浏览状态与缓存，
@@ -95,7 +97,9 @@ class Account {
     if (name.isEmpty) {
       return '?';
     }
-    return name.substring(0, 1).toUpperCase();
+    // 按字素取首字：substring(0, 1) 会把 emoji 的代理对切成半个码元，
+    // 头像位置渲染成方块。
+    return name.characters.take(1).toString().toUpperCase();
   }
 
   /// 服务器域名（含端口），用于列表副标题。

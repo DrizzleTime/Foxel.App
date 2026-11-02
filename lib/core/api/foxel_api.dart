@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 
 import 'package:foxel/core/api/foxel_api_exception.dart';
+import 'package:foxel/core/api/transfer_cancel.dart';
 import 'package:foxel/core/models/adapter_usage.dart';
 import 'package:foxel/core/models/compression.dart';
 import 'package:foxel/core/models/file_entry.dart';
@@ -140,23 +141,45 @@ class FoxelApi {
         .toList();
   }
 
+  /// 预览类读取的硬上限：超过这个尺寸不再整体拉进内存。
+  ///
+  /// 图片查看器走 [readFile]，用户点开一个几百 MB 的 TIFF 时，
+  /// 整文件读进内存会直接把进程拖垮。
+  static const int maxInMemoryBytes = 32 * 1024 * 1024;
+
   Future<Uint8List> readFile(String path) async {
+    final request = http.Request(
+      'GET',
+      _uri('/fs/file/${path_utils.encodePath(path)}'),
+    );
+    request.headers.addAll(_headers());
     final response = await _withTimeout(
-      _client.get(
-        _uri('/fs/file/${path_utils.encodePath(path)}'),
-        headers: _headers(),
-      ),
+      _client.send(request),
+      timeout: _transferTimeout,
     );
     if (response.statusCode < 200 || response.statusCode >= 300) {
-      _throwHttpError(response);
+      final body = await response.stream.toBytes();
+      _throwHttpError(http.Response.bytes(body, response.statusCode));
     }
-    return response.bodyBytes;
+    // 先看 Content-Length 决定收不收：超限直接丢弃响应流，不浪费内存和带宽。
+    final length = response.contentLength;
+    if (length != null && length > maxInMemoryBytes) {
+      await response.stream.listen(null).cancel();
+      throw const FoxelApiException('文件超过 32 MB，暂不支持直接预览');
+    }
+    final bytes = await response.stream.toBytes();
+    if (bytes.length > maxInMemoryBytes) {
+      // 服务端没给 Content-Length 时的兜底。
+      throw const FoxelApiException('文件超过 32 MB，暂不支持直接预览');
+    }
+    return bytes;
   }
 
   Future<void> uploadFile({
     required String remotePath,
     required String localPath,
     void Function(int sent, int total)? onProgress,
+    TransferCancelToken? cancelToken,
   }) async {
     final file = File(localPath);
     final total = await file.length();
@@ -174,6 +197,11 @@ class FoxelApi {
       http.MultipartFile(
         'file',
         file.openRead().map((chunk) {
+          // 协作式取消：上传途中也能中断。抛出后 http 包会终止请求，
+          // 不再往服务端继续灌数据。
+          if (cancelToken?.isCancelled ?? false) {
+            throw TransferCancelledException(cancelToken?.reason ?? '传输已中断');
+          }
           sent += chunk.length;
           onProgress?.call(sent, total);
           return chunk;
@@ -195,6 +223,7 @@ class FoxelApi {
     required String remotePath,
     required File outputFile,
     void Function(int received, int? total)? onProgress,
+    TransferCancelToken? cancelToken,
   }) async {
     final request = http.Request(
       'GET',
@@ -229,6 +258,10 @@ class FoxelApi {
       // 逐个 chunk 设空闲超时：下载大文件可能很慢，但「60 秒没有任何数据」
       // 基本可以判定连接已经死了，不能无限挂着。
       await for (final chunk in response.stream.timeout(_transferTimeout)) {
+        // 取消时直接跳出：`await for` 会取消订阅，catch 分支再删掉半截的 .part。
+        if (cancelToken?.isCancelled ?? false) {
+          throw TransferCancelledException(cancelToken?.reason ?? '传输已中断');
+        }
         received += chunk.length;
         sink.add(chunk);
         onProgress?.call(received, total);

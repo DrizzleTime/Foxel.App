@@ -287,10 +287,21 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
   /// 最近一次展开中读取失败的目录数（用于提示，不静默吞掉异常）。
   int _skippedDirCount = 0;
 
+  /// 递归展开的最大深度。
+  ///
+  /// 服务端若有软链接成环（NAS 上很常见），没有上限会一路递归到栈溢出，
+  /// 表现为「下载文件夹」直接卡死应用。超限按读取失败计数并提示。
+  static const int _maxCollectDepth = 32;
+
   Future<List<String>> _collectFiles(
     String basePath,
-    List<String> relativeDirs,
-  ) async {
+    List<String> relativeDirs, {
+    int depth = 0,
+  }) async {
+    if (depth > _maxCollectDepth) {
+      _skippedDirCount += 1;
+      return const <String>[];
+    }
     final files = <String>[];
     for (final dir in relativeDirs) {
       try {
@@ -300,7 +311,13 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
         for (final child in listing.entries) {
           final childPath = dir.isEmpty ? child.name : '$dir/${child.name}';
           if (child.isDir) {
-            files.addAll(await _collectFiles(basePath, <String>[childPath]));
+            files.addAll(
+              await _collectFiles(
+                basePath,
+                <String>[childPath],
+                depth: depth + 1,
+              ),
+            );
           } else {
             files.add(childPath);
           }
@@ -900,6 +917,10 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
     }
     try {
       final result = await FilePicker.platform.pickFiles(withData: false);
+      if (!mounted) {
+        // 选文件期间切换了账户：不要再把任务挂到已被替换的 State 上。
+        return;
+      }
       final file = result?.files.isNotEmpty == true ? result!.files.first : null;
       final localPath = file?.path;
       if (file == null || localPath == null) {
@@ -1028,6 +1049,10 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
     }
     try {
       final dir = await DownloadDirStore.resolveFor(widget.account.id, account: widget.account);
+      if (!mounted) {
+        // 建目录期间切换账户：这个 State 已被换掉，任务不该再挂到旧会话上。
+        return;
+      }
       // 服务端文件名不可信：先清洗再拼本地路径。直接拼会踩两类坑——
       // ".." 指到上级目录、":" "*" 之类在 Windows 上建文件直接失败。
       final safeName = DownloadDirStore.sanitizeFileSegment(entry.name);

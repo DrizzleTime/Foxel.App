@@ -260,10 +260,14 @@ class AccountStore {
     return json;
   }
 
-  Future<void> updateToken(String id, String token) async {
+  /// 更新 token。
+  ///
+  /// 必须走串行队列：与 [remove] 并发时，删除流程刚把 key 清掉、
+  /// 这里的写入又会把 token 补回去，留下一个账户已删但 token 还在的残骸。
+  Future<void> updateToken(String id, String token) => _serialized(() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(tokenKey(id), token);
-  }
+  });
 
   /// 记录「最后使用时间」。
   Future<void> touch(String id) => _serialized(() async {
@@ -300,9 +304,12 @@ class AccountStore {
     await prefs.setString(_indexKey, jsonEncode(next.map(_toIndex).toList()));
 
     final prefix = 'foxel_acc_${id}_';
+    // 共享分区（关闭「独立媒体缓存」时的播放进度）只在删掉最后一个账户时清理：
+    // 否则删 A 会顺手把 B / C 共用的那份进度也清掉。
+    final purgeSharedCache = next.isEmpty;
     for (final key in prefs.getKeys().toList()) {
-      // 关闭「独立媒体缓存」时播放进度写在共享分区，也一并清掉，否则会残留并串味。
-      if (key.startsWith(prefix) || key.startsWith(_sharedCachePrefix)) {
+      if (key.startsWith(prefix) ||
+          (purgeSharedCache && key.startsWith(_sharedCachePrefix))) {
         await prefs.remove(key);
       }
     }

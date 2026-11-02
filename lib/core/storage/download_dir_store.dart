@@ -13,22 +13,15 @@ import 'package:foxel/core/models/account.dart';
 ///
 /// Android 端默认目录固定为 /storage/emulated/0/Download/Foxel，
 /// 用户可以在「设置 → 下载目录」中修改。
+///
+/// 注意：这里只剩**账户级**接口（`dirKeyFor` / `currentDirFor` / `resolveFor`…）。
+/// 早期那套「全局一个下载目录」的 API 已经删干净了 —— 多账户下它会绕过沙箱，
+/// 让 A 账户的文件落进 B 账户目录，留着就是给后来人挖坑。
 class DownloadDirStore {
-  static const _prefsKey = 'foxel_download_dir';
   static const _channel = MethodChannel('foxel/storage');
 
   /// Android 端固定默认下载目录。
   static const String androidDefaultDir = '/storage/emulated/0/Download/Foxel';
-
-  /// 读取当前配置的下载目录，未配置时返回平台默认值。
-  static Future<String> currentDir() async {
-    final prefs = await SharedPreferences.getInstance();
-    final saved = prefs.getString(_prefsKey);
-    if (saved != null && saved.trim().isNotEmpty) {
-      return saved.trim();
-    }
-    return defaultDir();
-  }
 
   /// 平台默认下载目录。Android 固定为 [androidDefaultDir]，
   /// 其他平台优先使用系统下载目录。
@@ -241,37 +234,6 @@ class DownloadDirStore {
       throw const FileSystemException('无法确定下载目录，请在「设置 → 下载目录」中手动指定');
     }
     final dir = Directory(path);
-    if (!await dir.exists()) {
-      await dir.create(recursive: true);
-    }
-    return dir;
-  }
-
-  /// 当前是否配置了自定义下载目录。
-  static Future<bool> isCustomDir() async {
-    final prefs = await SharedPreferences.getInstance();
-    final saved = prefs.getString(_prefsKey);
-    if (saved == null || saved.trim().isEmpty) {
-      return false;
-    }
-    return saved.trim() != await defaultDir();
-  }
-
-  /// 保存自定义下载目录。
-  static Future<void> setDir(String path) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_prefsKey, path.trim());
-  }
-
-  /// 恢复默认下载目录。
-  static Future<void> resetDir() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_prefsKey);
-  }
-
-  /// 解析实际下载目录，并确保目录存在。
-  static Future<Directory> resolve() async {
-    final dir = Directory(await currentDir());
     if (!await dir.exists()) {
       await dir.create(recursive: true);
     }
