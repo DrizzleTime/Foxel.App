@@ -170,55 +170,62 @@ class _AppRootState extends State<AppRoot> {
     }
 
     setState(() => _switching = true);
-    final verified = await _verify(target);
-    if (!mounted) {
-      return;
-    }
-
-    if (verified == null) {
-      await _store.markStale(target.id, stale: true);
-      await _reload();
+    // 整个切换必须包在 try/finally 里：任何一个提前 return（账户被删、
+    // 页面卸载、存储异常）都要解除遮罩，否则 _switching 永远是 true，
+    // build 会一直盖着全屏转圈，所有交互被吃掉，只能结束进程。
+    try {
+      final verified = await _verify(target);
       if (!mounted) {
         return;
       }
-      setState(() => _switching = false);
-      _showMessage('「${target.displayName}」登录已失效，请重新验证');
-      return;
-    }
 
-    if (current != null) {
-      // 「独立传输队列」关闭时允许任务跨账户继续跑。
-      if (current.isolatedTasks) {
-        _taskControllers[current.id]?.interruptAll('已因切换账户中断');
+      if (verified == null) {
+        await _store.markStale(target.id, stale: true);
+        await _reload();
+        if (!mounted) {
+          return;
+        }
+        _showMessage('「${target.displayName}」登录已失效，请重新验证');
+        return;
+      }
+
+      if (current != null) {
+        // 「独立传输队列」关闭时允许任务跨账户继续跑。
+        if (current.isolatedTasks) {
+          _taskControllers[current.id]?.interruptAll('已因切换账户中断');
+        }
+      }
+
+      // await 期间账户可能已被删除：写索引前必须复查，否则会复活已删账户。
+      final stillExists = await _exists(verified.id);
+      if (!mounted || !stillExists) {
+        return;
+      }
+
+      await _store.upsert(verified);
+      await _store.setActiveId(verified.id);
+      await _store.touch(verified.id);
+      await _reload();
+      _lastBaseUrl = verified.baseUrl;
+      // 「独立传输队列」关闭时不关闭旧连接，让跨账户任务继续跑完。
+      if (current?.isolatedTasks ?? true) {
+        _api?.close();
+      }
+
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _active = verified;
+        _api = FoxelApi(baseUrl: verified.baseUrl, token: verified.token);
+      });
+      _publishAccounts();
+      _showMessage('已切换到「${verified.displayName}」，数据与其他账户隔离');
+    } finally {
+      if (mounted && _switching) {
+        setState(() => _switching = false);
       }
     }
-
-    // await 期间账户可能已被删除：写索引前必须复查，否则会复活已删账户。
-    final stillExists = await _exists(verified.id);
-    if (!mounted || !stillExists) {
-      return;
-    }
-
-    await _store.upsert(verified);
-    await _store.setActiveId(verified.id);
-    await _store.touch(verified.id);
-    await _reload();
-    _lastBaseUrl = verified.baseUrl;
-    // 「独立传输队列」关闭时不关闭旧连接，让跨账户任务继续跑完。
-    if (current?.isolatedTasks ?? true) {
-      _api?.close();
-    }
-
-    if (!mounted) {
-      return;
-    }
-    setState(() {
-      _active = verified;
-      _api = FoxelApi(baseUrl: verified.baseUrl, token: verified.token);
-      _switching = false;
-    });
-    _publishAccounts();
-    _showMessage('已切换到「${verified.displayName}」，数据与其他账户隔离');
   }
 
   /// 打开「账户管理」独立页（设置页内的入口）。

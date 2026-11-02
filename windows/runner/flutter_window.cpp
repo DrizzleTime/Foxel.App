@@ -50,6 +50,8 @@ bool FlutterWindow::OnCreate() {
   tray_.SetHandlers([this]() { ShowMainWindow(); }, [this]() { QuitApp(); });
   if (!tray_.Create(GetHandle(), kTrayCallbackMessage, kWindowTitle)) {
     // 托盘挂载失败也要显示窗口，否则用户面对的是一个没有托盘入口的进程。
+    // 同时记下「没有托盘」：此后 WM_CLOSE 必须真退出，不能只隐藏。
+    tray_available_ = false;
     ShowMainWindow();
     return true;
   }
@@ -169,6 +171,12 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
       // 关闭主界面只收进托盘：隐藏而非销毁，进程与 Flutter 引擎继续运行。
       // 唯一的真退出路径是托盘菜单「退出」（见 QuitApp）。
       if (!quitting_) {
+        if (!tray_available_) {
+          // 没有托盘图标 = 没有「显示」和「退出」的入口，关闭窗口必须是真退出，
+          // 否则用户只会看到一个消失的窗口和一个杀不掉的进程。
+          QuitApp();
+          return 0;
+        }
         HideMainWindow();
         return 0;
       }

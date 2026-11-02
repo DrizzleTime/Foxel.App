@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -22,6 +23,24 @@ class FoxelApi {
   final String baseUrl;
   String token;
   final http.Client _client;
+
+  /// 普通请求超时。
+  ///
+  /// `http.Client` 不提供应用层超时：半开连接、服务端不响应时请求会长时间
+  /// 挂起（取决于系统 TCP 超时），界面表现为永久 loading，切账户的遮罩也退不掉。
+  static const Duration _requestTimeout = Duration(seconds: 20);
+
+  /// 上传 / 下载的宽松超时：大文件首包可能较慢，但不能无限等。
+  static const Duration _transferTimeout = Duration(seconds: 60);
+
+  /// 给任意请求加上超时，并把 [TimeoutException] 换成用户能看懂的错误。
+  Future<T> _withTimeout<T>(Future<T> future, {Duration? timeout}) async {
+    try {
+      return await future.timeout(timeout ?? _requestTimeout);
+    } on TimeoutException {
+      throw const FoxelApiException('请求超时：服务器没有响应，请检查网络或服务器地址');
+    }
+  }
 
   static String normalizeBaseUrl(String value) {
     var cleaned = value.trim();
@@ -56,10 +75,12 @@ class FoxelApi {
     required String username,
     required String password,
   }) async {
-    final response = await _client.post(
-      _uri('/auth/login'),
-      headers: const {'Content-Type': 'application/x-www-form-urlencoded'},
-      body: {'username': username, 'password': password},
+    final response = await _withTimeout(
+      _client.post(
+        _uri('/auth/login'),
+        headers: const {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: {'username': username, 'password': password},
+      ),
     );
     if (response.statusCode < 200 || response.statusCode >= 300) {
       _throwHttpError(response);
@@ -120,9 +141,11 @@ class FoxelApi {
   }
 
   Future<Uint8List> readFile(String path) async {
-    final response = await _client.get(
-      _uri('/fs/file/${path_utils.encodePath(path)}'),
-      headers: _headers(),
+    final response = await _withTimeout(
+      _client.get(
+        _uri('/fs/file/${path_utils.encodePath(path)}'),
+        headers: _headers(),
+      ),
     );
     if (response.statusCode < 200 || response.statusCode >= 300) {
       _throwHttpError(response);
@@ -159,7 +182,10 @@ class FoxelApi {
         filename: remotePath.split('/').where((item) => item.isNotEmpty).last,
       ),
     );
-    final streamed = await request.send();
+    final streamed = await _withTimeout(
+      request.send(),
+      timeout: _transferTimeout,
+    );
     final response = await http.Response.fromStream(streamed);
     _decodeWrapped(response);
     onProgress?.call(total, total);
@@ -175,7 +201,10 @@ class FoxelApi {
       _uri('/fs/file/${path_utils.encodePath(remotePath)}'),
     );
     request.headers.addAll(_headers());
-    final response = await _client.send(request);
+    final response = await _withTimeout(
+      _client.send(request),
+      timeout: _transferTimeout,
+    );
     if (response.statusCode < 200 || response.statusCode >= 300) {
       final body = await response.stream.toBytes();
       _throwHttpError(http.Response.bytes(body, response.statusCode));
@@ -197,7 +226,9 @@ class FoxelApi {
     final total = response.contentLength;
     onProgress?.call(0, total);
     try {
-      await for (final chunk in response.stream) {
+      // 逐个 chunk 设空闲超时：下载大文件可能很慢，但「60 秒没有任何数据」
+      // 基本可以判定连接已经死了，不能无限挂着。
+      await for (final chunk in response.stream.timeout(_transferTimeout)) {
         received += chunk.length;
         sink.add(chunk);
         onProgress?.call(received, total);
@@ -257,9 +288,11 @@ class FoxelApi {
   }
 
   Future<void> deletePath(String path) async {
-    final response = await _client.delete(
-      _uri('/fs/${path_utils.encodePath(path)}'),
-      headers: _headers(),
+    final response = await _withTimeout(
+      _client.delete(
+        _uri('/fs/${path_utils.encodePath(path)}'),
+        headers: _headers(),
+      ),
     );
     _decodeWrapped(response);
   }
@@ -369,7 +402,9 @@ class FoxelApi {
     String path, [
     Map<String, String>? query,
   ]) async {
-    final response = await _client.get(_uri(path, query), headers: _headers());
+    final response = await _withTimeout(
+      _client.get(_uri(path, query), headers: _headers()),
+    );
     final data = _decodeWrapped(response);
     if (data is Map<String, dynamic>) {
       return data;
@@ -378,7 +413,9 @@ class FoxelApi {
   }
 
   Future<List<dynamic>> _getJsonList(String path) async {
-    final response = await _client.get(_uri(path), headers: _headers());
+    final response = await _withTimeout(
+      _client.get(_uri(path), headers: _headers()),
+    );
     final data = _decodeWrapped(response);
     if (data is List<dynamic>) {
       return data;
@@ -387,10 +424,12 @@ class FoxelApi {
   }
 
   Future<void> _postJson(String path, Map<String, dynamic> payload) async {
-    final response = await _client.post(
-      _uri(path),
-      headers: _headers(json: true),
-      body: jsonEncode(payload),
+    final response = await _withTimeout(
+      _client.post(
+        _uri(path),
+        headers: _headers(json: true),
+        body: jsonEncode(payload),
+      ),
     );
     _decodeWrapped(response);
   }
@@ -400,10 +439,12 @@ class FoxelApi {
     String path,
     Map<String, dynamic> payload,
   ) async {
-    final response = await _client.post(
-      _uri(path),
-      headers: _headers(json: true),
-      body: jsonEncode(payload),
+    final response = await _withTimeout(
+      _client.post(
+        _uri(path),
+        headers: _headers(json: true),
+        body: jsonEncode(payload),
+      ),
     );
     return _decodeWrapped(response);
   }

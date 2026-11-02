@@ -46,6 +46,11 @@ class FlutterWindow : public Win32Window {
 
   // 是否已进入真正的退出流程：置位后 WM_CLOSE 不再被改写为隐藏。
   bool quitting_ = false;
+
+  // 托盘图标是否挂载成功。
+  // 挂载失败时程序没有任何「显示/退出」入口，因此 WM_CLOSE 必须退化为真退出，
+  // 否则窗口一关就只剩一个点不到的进程，只能靠任务管理器结束。
+  bool tray_available_ = true;
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_

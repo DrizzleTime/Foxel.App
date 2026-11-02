@@ -8,7 +8,7 @@
 library;
 
 /// 展示用的版本号（界面「关于 Foxel」）。
-const String appVersion = '1.0.10';
+const String appVersion = '1.0.11';
 
 /// 带构建号的完整版本。
-const String appVersionName = 'v1.0.10';
+const String appVersionName = 'v1.0.11';

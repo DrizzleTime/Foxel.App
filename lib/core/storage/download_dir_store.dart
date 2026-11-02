@@ -116,6 +116,33 @@ class DownloadDirStore {
     return value.replaceAll(RegExp(r'^[.\s]+|[.\s]+$'), '');
   }
 
+  /// 把**服务端返回的文件名**清洗成各平台都能落盘的一段路径。
+  ///
+  /// 与 [sanitizeFolderName] 的区别：
+  /// * 不截断长度 —— 文件名不承担目录层级职责，截断会造成同名覆盖；
+  /// * 重点防 `..` —— 直接拼进 `${dir}/${name}` 会写到上级目录。
+  ///
+  /// 返回空串表示这一段不可用，调用方应跳过该条目而不是拼出畸形路径。
+  static String sanitizeFileSegment(String raw) {
+    final trimmed = raw.trim();
+    // "." / ".." 以及各种变体（"..."/".. "）都会指向上级目录，必须先挡掉。
+    if (trimmed.isEmpty || RegExp(r'^\.+$').hasMatch(trimmed)) {
+      return '';
+    }
+    var name = trimmed.replaceAll(RegExp(r'[\\/:*?"<>|\x00-\x1F]'), '_');
+    name = name.replaceAll(RegExp(r'\s+'), ' ');
+    name = _trimEdges(name);
+    if (name.isEmpty) {
+      return '';
+    }
+    // Windows 保留名（CON / NUL / COM1…）加前缀规避，含 "CON.txt" 形式。
+    final stem = name.split('.').first.toLowerCase();
+    if (_reservedNames.contains(stem)) {
+      name = 'foxel_$name';
+    }
+    return name;
+  }
+
   /// 账户对应的文件夹名：**优先显示名称**，未填写时退回账户 ID。
   ///
   /// [disambiguator] 用于显示名称与既有账户重复时追加短标识，避免两个账户

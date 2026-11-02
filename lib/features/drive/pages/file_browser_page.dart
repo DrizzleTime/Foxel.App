@@ -352,16 +352,23 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
         if (!mounted) {
           return;
         }
-        final name = relative.split('/').last;
         // 保留相对目录结构，避免同名的子目录文件互相覆盖。
-        final relativeDir = relative.contains('/')
-            ? relative.substring(0, relative.lastIndexOf('/'))
-            : '';
+        // 每一段都要清洗：服务端可以返回 "a/../../b" 这种路径，直接拼会写穿目录。
+        final segments = <String>[
+          for (final segment in relative.split('/'))
+            if (segment.isNotEmpty)
+              DownloadDirStore.sanitizeFileSegment(segment),
+        ];
+        if (segments.isEmpty) {
+          _skippedDirCount += 1;
+          continue;
+        }
+        final name = segments.last;
+        final dirSegments = segments.sublist(0, segments.length - 1);
         var target = localDir;
-        if (relativeDir.isNotEmpty) {
+        if (dirSegments.isNotEmpty) {
           target = Directory(
-            '${localDir.path}${Platform.pathSeparator}'
-            '${relativeDir.replaceAll('/', Platform.pathSeparator)}',
+            <String>[localDir.path, ...dirSegments].join(Platform.pathSeparator),
           );
           if (!await target.exists()) {
             await target.create(recursive: true);
@@ -370,6 +377,7 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
         widget.taskController.startDownload(
           api: widget.api,
           name: name,
+          // 远端路径必须用原始相对路径，清洗只作用于本地落盘名。
           remotePath: FoxelApi.joinPath(base, relative),
           outputFile: File(
             '${target.path}${Platform.pathSeparator}$name',
@@ -1020,7 +1028,14 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
     }
     try {
       final dir = await DownloadDirStore.resolveFor(widget.account.id, account: widget.account);
-      final output = File('${dir.path}/${entry.name}');
+      // 服务端文件名不可信：先清洗再拼本地路径。直接拼会踩两类坑——
+      // ".." 指到上级目录、":" "*" 之类在 Windows 上建文件直接失败。
+      final safeName = DownloadDirStore.sanitizeFileSegment(entry.name);
+      if (safeName.isEmpty) {
+        _showMessage('文件名不可用，已跳过：${entry.name}', isError: true);
+        return;
+      }
+      final output = File('${dir.path}${Platform.pathSeparator}$safeName');
       widget.taskController.startDownload(
         api: widget.api,
         name: entry.name,
